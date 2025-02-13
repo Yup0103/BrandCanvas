@@ -13,6 +13,7 @@ import AIWorkflows from './pages/AIWorkflows';
 import WorkflowDetails from './pages/WorkflowDetails';
 import AIAgents from './pages/AIAgents';
 import AgentCustomization from './pages/AgentCustomization';
+import BrandCanvas from './pages/BrandCanvas';
 
 const queryClient = new QueryClient();
 
@@ -40,6 +41,7 @@ const App = () => (
             <Route path="/insights" element={<div className="p-8">Insights Page</div>} />
             <Route path="/calendar" element={<div className="p-8">Calendar Page</div>} />
             <Route path="/settings" element={<div className="p-8">Settings Page</div>} />
+            <Route path="/brand-canvas" element={<BrandCanvas />} />
           </Route>
         </Routes>
       </BrowserRouter>

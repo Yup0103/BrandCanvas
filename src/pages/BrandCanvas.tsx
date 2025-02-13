@@ -1,0 +1,904 @@
+import React, { useRef, useState, useEffect } from 'react';
+import { fabric } from 'fabric';
+import {
+  Upload,
+  Image,
+  Video,
+  Undo,
+  Redo,
+  Save,
+  Download,
+  Plus,
+  Search,
+  Layout,
+  Type,
+  Shapes,
+  ImageIcon,
+  VideoIcon,
+  Music,
+  Grid,
+  ZoomIn,
+  ZoomOut,
+  Move,
+  ChevronLeft,
+  ChevronRight,
+  Settings,
+  Share,
+  MoreVertical,
+  Clock,
+  Folder,
+  Star,
+  PanelLeftClose,
+  PanelLeftOpen,
+  ChevronDown,
+  Menu,
+  MousePointerClick,
+  Square,
+  Minus,
+  Maximize2,
+  Group,
+  Ungroup,
+  Trash2,
+} from 'lucide-react';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Slider } from '@/components/ui/slider';
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from '@/components/ui/tooltip';
+import {
+  Sheet,
+  SheetContent,
+  SheetTrigger,
+} from "@/components/ui/sheet";
+import { cn } from '@/lib/utils';
+import TextEditor from '@/components/canvas/TextEditor';
+import ShapeEditor from '@/components/canvas/ShapeEditor';
+import ShapePopover from '@/components/canvas/ShapePopover';
+import ImagePopover from '@/components/canvas/ImagePopover';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { Separator } from '@/components/ui/separator';
+import { LayerMenu } from '@/components/canvas/LayerMenu';
+import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+
+const BrandCanvas: React.FC = () => {
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const canvasContainerRef = useRef<HTMLDivElement>(null);
+  const fabricCanvasRef = useRef<fabric.Canvas | null>(null);
+  const [isLoading, setIsLoading] = useState(false);
+  const [selectedObject, setSelectedObject] = useState<fabric.Object | null>(null);
+  const [canvasHistory, setCanvasHistory] = useState<string[]>([]);
+  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1);
+  const [canvasSize, setCanvasSize] = useState({ width: 1080, height: 1080 });
+  const [zoomLevel, setZoomLevel] = useState(100);
+  const [selectedShape, setSelectedShape] = useState('rect');
+  const [selectedTool, setSelectedTool] = useState('select');
+  const [isDragging, setIsDragging] = useState(false);
+  const [panPosition, setPanPosition] = useState({ x: 0, y: 0 });
+  const lastMousePosition = useRef({ x: 0, y: 0 });
+  const [undoStack, setUndoStack] = useState<string[]>([]);
+  const [redoStack, setRedoStack] = useState<string[]>([]);
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
+  const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
+  const [isMobile, setIsMobile] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
+
+  // Predefined canvas sizes
+  const canvasSizePresets = {
+    'Instagram Post': { width: 1080, height: 1080 },
+    'Instagram Story': { width: 1080, height: 1920 },
+    'Facebook Post': { width: 1200, height: 630 },
+    'Twitter Post': { width: 1200, height: 675 },
+    'LinkedIn Post': { width: 1200, height: 627 },
+    'YouTube Thumbnail': { width: 1280, height: 720 },
+    'A4': { width: 2480, height: 3508 }
+  };
+
+  // Initialize canvas
+  useEffect(() => {
+    if (canvasRef.current) {
+      fabricCanvasRef.current = new fabric.Canvas(canvasRef.current, {
+        width: canvasSize.width,
+        height: canvasSize.height,
+        backgroundColor: '#ffffff',
+        preserveObjectStacking: true,
+        stopContextMenu: true,
+      });
+
+      const canvas = fabricCanvasRef.current;
+
+      // Event listeners
+      const handleModified = () => {
+        saveToHistory();
+        canvas.requestRenderAll();
+      };
+
+      const handleAdded = () => {
+        saveToHistory();
+        canvas.requestRenderAll();
+      };
+
+      const handleRemoved = () => {
+        saveToHistory();
+        canvas.requestRenderAll();
+      };
+
+      canvas.on('object:modified', handleModified);
+      canvas.on('object:added', handleAdded);
+      canvas.on('object:removed', handleRemoved);
+
+      // Selection events
+      canvas.on('selection:created', (e: fabric.IEvent) => {
+        if (!e.selected) return;
+        setSelectedObject(e.selected[0]);
+        setIsRightSidebarOpen(true);
+      });
+
+      canvas.on('selection:updated', (e: fabric.IEvent) => {
+        if (!e.selected) return;
+        setSelectedObject(e.selected[0]);
+        setIsRightSidebarOpen(true);
+      });
+
+      canvas.on('selection:cleared', () => {
+        setSelectedObject(null);
+      });
+
+      // Initial history state
+      saveToHistory();
+
+      // Cleanup
+      return () => {
+        if (canvas) {
+          canvas.off('object:modified', handleModified);
+          canvas.off('object:added', handleAdded);
+          canvas.off('object:removed', handleRemoved);
+          canvas.off('selection:created', handleSelection);
+          canvas.off('selection:cleared', handleDeselection);
+          canvas.dispose();
+          fabricCanvasRef.current = null;
+        }
+      };
+    }
+  }, [canvasSize]);
+
+  // Handle window resize
+  useEffect(() => {
+    const handleResize = () => {
+      setIsMobile(window.innerWidth < 768);
+      if (window.innerWidth < 768) {
+        setIsLeftSidebarOpen(false);
+        setIsRightSidebarOpen(false);
+      }
+      updateCanvasScale();
+    };
+
+    window.addEventListener('resize', handleResize);
+    handleResize();
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const handleSelection = (e: fabric.IEvent) => {
+    const selected = fabricCanvasRef.current?.getActiveObject();
+    setSelectedObject(selected || null);
+  };
+
+  const handleDeselection = () => {
+    setSelectedObject(null);
+  };
+
+  const saveToHistory = () => {
+    if (fabricCanvasRef.current) {
+      const json = JSON.stringify(fabricCanvasRef.current.toJSON());
+      setCanvasHistory(prev => {
+        const newHistory = [...prev.slice(0, currentHistoryIndex + 1), json];
+        if (newHistory.length > 50) newHistory.shift(); // Limit history size
+        return newHistory;
+      });
+      setCurrentHistoryIndex(prev => prev + 1);
+    }
+  };
+
+  // Undo function
+  const handleUndo = () => {
+    if (!fabricCanvasRef.current || currentHistoryIndex < 1) return;
+
+    const previousState = canvasHistory[currentHistoryIndex - 1];
+
+    fabricCanvasRef.current.loadFromJSON(previousState, () => {
+      fabricCanvasRef.current?.renderAll();
+    });
+
+    setCurrentHistoryIndex(prev => prev - 1);
+  };
+
+  // Redo function
+  const handleRedo = () => {
+    if (!fabricCanvasRef.current || currentHistoryIndex >= canvasHistory.length - 1) return;
+
+    const nextState = canvasHistory[currentHistoryIndex + 1];
+
+    fabricCanvasRef.current.loadFromJSON(nextState, () => {
+      fabricCanvasRef.current?.renderAll();
+    });
+
+    setCurrentHistoryIndex(prev => prev + 1);
+  };
+
+  // Handle keyboard shortcuts
+  useEffect(() => {
+    const handleKeyboard = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          handleRedo();
+        } else {
+          handleUndo();
+        }
+      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        e.preventDefault();
+        handleRedo();
+      } else if (e.ctrlKey && e.key === 'g') {
+        e.preventDefault();
+        handleGroup();
+      } else if (e.ctrlKey && e.shiftKey && e.key === 'G') {
+        e.preventDefault();
+        handleUngroup();
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyboard);
+    return () => window.removeEventListener('keydown', handleKeyboard);
+  }, []);
+
+  // Update canvas scale
+  const updateCanvasScale = () => {
+    if (canvasContainerRef.current && fabricCanvasRef.current) {
+      const container = canvasContainerRef.current;
+      const containerWidth = container.clientWidth;
+      const containerHeight = container.clientHeight;
+      const scaleX = (containerWidth - 40) / canvasSize.width;
+      const scaleY = (containerHeight - 40) / canvasSize.height;
+      const scale = Math.min(scaleX, scaleY);
+      
+      setZoomLevel(Math.round(scale * 100));
+      
+      // Update viewport transform to maintain center position
+      const vpt = fabricCanvasRef.current.viewportTransform;
+      if (vpt) {
+        const currentCenterX = -vpt[4] / vpt[0] + containerWidth / (2 * vpt[0]);
+        const currentCenterY = -vpt[5] / vpt[0] + containerHeight / (2 * vpt[0]);
+
+        fabricCanvasRef.current.setZoom(scale);
+        
+        const newVpt = fabricCanvasRef.current.viewportTransform;
+        if (newVpt) {
+          newVpt[4] = -currentCenterX * scale + containerWidth / 2;
+          newVpt[5] = -currentCenterY * scale + containerHeight / 2;
+          fabricCanvasRef.current.setViewportTransform(newVpt);
+        }
+      }
+
+      fabricCanvasRef.current.renderAll();
+    }
+  };
+
+  // Handle zoom
+  const handleZoom = (newZoom: number) => {
+    const zoom = Math.min(Math.max(newZoom, 10), 400);
+    setZoomLevel(zoom);
+    
+    if (fabricCanvasRef.current) {
+      const center = fabricCanvasRef.current.getCenter();
+      fabricCanvasRef.current.zoomToPoint(
+        new fabric.Point(center.left, center.top),
+        zoom / 100
+      );
+      fabricCanvasRef.current.requestRenderAll();
+    }
+  };
+
+  // Handle adding new text
+  const handleAddText = () => {
+    if (fabricCanvasRef.current) {
+      const text = new fabric.IText('Double click to edit', {
+        left: canvasSize.width / 2,
+        top: canvasSize.height / 2,
+        fontSize: 40,
+        fill: '#000000',
+        fontFamily: 'Arial',
+        originX: 'center',
+        originY: 'center',
+      });
+
+      fabricCanvasRef.current.add(text);
+      fabricCanvasRef.current.setActiveObject(text);
+      text.enterEditing();
+      fabricCanvasRef.current.renderAll();
+      setSelectedObject(text);
+      setIsRightSidebarOpen(true);
+      saveToHistory(); // Save state after adding text
+    }
+  };
+
+  // Handle shape selection and addition
+  const handleShapeSelect = (shape: string) => {
+    setSelectedShape(shape);
+    handleAddShape(shape);  // Pass the shape directly to handleAddShape
+  };
+
+  // Add shape to canvas
+  const handleAddShape = (shape: string) => {
+    const canvas = fabricCanvasRef.current;
+    if (!canvas) return;
+
+    const center = canvas.getCenter();
+    let fabricObject;
+
+    const commonProps = {
+      left: center.left,
+      top: center.top,
+      fill: '#7C3AED', // Purple-600
+      stroke: '#6D28D9', // Purple-700
+      strokeWidth: 1,
+      originX: 'center',
+      originY: 'center',
+    };
+
+    switch (shape) {
+      case 'rect':
+        fabricObject = new fabric.Rect({
+          ...commonProps,
+          width: 100,
+          height: 100,
+        });
+        break;
+      case 'circle':
+        fabricObject = new fabric.Circle({
+          ...commonProps,
+          radius: 50,
+        });
+        break;
+      case 'triangle':
+        fabricObject = new fabric.Triangle({
+          ...commonProps,
+          width: 100,
+          height: 100,
+        });
+        break;
+      case 'line':
+        fabricObject = new fabric.Line([0, 0, 100, 0], {
+          ...commonProps,
+          stroke: '#7C3AED',
+          strokeWidth: 2,
+        });
+        break;
+      case 'pentagon':
+        fabricObject = new fabric.Polygon(
+          [
+            { x: 50, y: 0 },
+            { x: 100, y: 40 },
+            { x: 80, y: 100 },
+            { x: 20, y: 100 },
+            { x: 0, y: 40 },
+          ],
+          {
+            ...commonProps,
+            width: 100,
+            height: 100,
+          }
+        );
+        break;
+      case 'hexagon':
+        fabricObject = new fabric.Polygon(
+          [
+            { x: 50, y: 0 },
+            { x: 100, y: 25 },
+            { x: 100, y: 75 },
+            { x: 50, y: 100 },
+            { x: 0, y: 75 },
+            { x: 0, y: 25 },
+          ],
+          {
+            ...commonProps,
+            width: 100,
+            height: 100,
+          }
+        );
+        break;
+      case 'star':
+        const points = 5;
+        const outerRadius = 50;
+        const innerRadius = 25;
+        const starPoints = [];
+        for (let i = 0; i < points * 2; i++) {
+          const radius = i % 2 === 0 ? outerRadius : innerRadius;
+          const angle = (i * Math.PI) / points;
+          starPoints.push({
+            x: radius * Math.sin(angle) + 50,
+            y: radius * Math.cos(angle) + 50,
+          });
+        }
+        fabricObject = new fabric.Polygon(starPoints, {
+          ...commonProps,
+          width: 100,
+          height: 100,
+        });
+        break;
+      case 'diamond':
+        fabricObject = new fabric.Polygon(
+          [
+            { x: 50, y: 0 },
+            { x: 100, y: 50 },
+            { x: 50, y: 100 },
+            { x: 0, y: 50 },
+          ],
+          {
+            ...commonProps,
+            width: 100,
+            height: 100,
+          }
+        );
+        break;
+      default:
+        return;
+    }
+
+    if (fabricObject) {
+      canvas.add(fabricObject);
+      canvas.setActiveObject(fabricObject);
+      canvas.requestRenderAll();
+      setSelectedObject(fabricObject);
+      setIsRightSidebarOpen(true);
+      saveToHistory(); // Save state after adding shape
+    }
+  };
+
+  // Handle image upload
+  const handleImageUpload = (file: File) => {
+    if (!fabricCanvasRef.current) return;
+
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      fabric.Image.fromURL(e.target?.result as string, (img) => {
+        if (!fabricCanvasRef.current) return;
+
+        const canvas = fabricCanvasRef.current;
+        
+        // Store file information
+        (img as any).file = file;
+        img.data = { name: file.name };
+
+        // Scale image to reasonable size if needed
+        const maxSize = 500;
+        if (img.width && img.height) {
+          if (img.width > maxSize || img.height > maxSize) {
+            const scale = maxSize / Math.max(img.width, img.height);
+            img.scale(scale);
+          }
+        }
+
+        canvas.add(img);
+        canvas.setActiveObject(img);
+        canvas.centerObject(img);
+        canvas.requestRenderAll();
+        setSelectedObject(img);
+        setIsRightSidebarOpen(true);
+        saveToHistory();
+      });
+    };
+    reader.readAsDataURL(file);
+  };
+
+  // Handle Nyx asset selection
+  const handleNyxAssetSelect = () => {
+    // TODO: Implement Nyx asset browser
+    console.log('Opening Nyx asset browser...');
+  };
+
+  // Handle keyboard events
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Delete' && selectedObject) {
+        if (fabricCanvasRef.current) {
+          fabricCanvasRef.current.remove(selectedObject);
+          setSelectedObject(null);
+          setIsRightSidebarOpen(false);
+          saveToHistory(); // Save state after deleting object
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [selectedObject]);
+
+  // Group selected objects
+  const handleGroup = () => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    const activeSelection = canvas.getActiveObject();
+
+    if (activeSelection && activeSelection.type === 'activeSelection') {
+      // Group the objects
+      const group = activeSelection.toGroup();
+      // Set the group as the active object
+      canvas.setActiveObject(group);
+      canvas.requestRenderAll();
+      saveToHistory();
+    }
+  };
+
+  // Ungroup selected group
+  const handleUngroup = () => {
+    if (!fabricCanvasRef.current) return;
+    
+    const canvas = fabricCanvasRef.current;
+    const activeObject = canvas.getActiveObject();
+
+    if (activeObject && activeObject.type === 'group') {
+      // Ungroup the objects
+      const items = (activeObject as fabric.Group).getObjects();
+      (activeObject as fabric.Group).destroy();
+      canvas.remove(activeObject);
+      
+      // Add the individual objects back to canvas
+      canvas.add(...items);
+      
+      // Select all the ungrouped objects
+      canvas.setActiveObject(new fabric.ActiveSelection(items, { canvas }));
+      canvas.requestRenderAll();
+      saveToHistory();
+    }
+  };
+
+  const toolbarButtons = [
+    { icon: MousePointerClick, label: 'Select', onClick: () => setSelectedTool('select') },
+    { icon: Move, label: 'Move', onClick: () => setSelectedTool('move') },
+    { icon: Square, label: 'Shapes' },
+    { 
+      icon: ImageIcon, 
+      label: 'Images',
+      component: (
+        <ImagePopover
+          trigger={
+            <Button
+              variant="ghost"
+              size="icon"
+              className="group relative hover:bg-purple-500/20 hover:scale-105 transition-all duration-200 ease-in-out"
+            >
+              <ImageIcon className="h-4 w-4 transition-transform group-hover:scale-110" />
+            </Button>
+          }
+          onImageSelect={handleImageUpload}
+          onNyxAssetSelect={handleNyxAssetSelect}
+        />
+      )
+    },
+    { icon: Type, label: 'Text', onClick: handleAddText },
+    { 
+      icon: Group, 
+      label: 'Group', 
+      onClick: handleGroup,
+      disabled: !fabricCanvasRef.current?.getActiveObject()?.type?.includes('activeSelection'),
+      tooltip: 'Group Objects (Ctrl+G)'
+    },
+    { 
+      icon: Ungroup, 
+      label: 'Ungroup', 
+      onClick: handleUngroup,
+      disabled: !fabricCanvasRef.current?.getActiveObject()?.type?.includes('group'),
+      tooltip: 'Ungroup Objects (Ctrl+Shift+G)'
+    },
+    { 
+      icon: Trash2, 
+      label: 'Delete', 
+      onClick: () => {
+        if (fabricCanvasRef.current && fabricCanvasRef.current.getActiveObject()) {
+          fabricCanvasRef.current.remove(fabricCanvasRef.current.getActiveObject());
+          fabricCanvasRef.current.requestRenderAll();
+          saveToHistory();
+        }
+      },
+      disabled: !fabricCanvasRef.current?.getActiveObject(),
+      tooltip: 'Delete (Del)'
+    },
+    { 
+      icon: Undo, 
+      label: 'Undo', 
+      onClick: handleUndo, 
+      disabled: currentHistoryIndex < 1,
+      tooltip: 'Undo (Ctrl+Z)'
+    },
+    { 
+      icon: Redo, 
+      label: 'Redo', 
+      onClick: handleRedo, 
+      disabled: currentHistoryIndex >= canvasHistory.length - 1,
+      tooltip: 'Redo (Ctrl+Y)'
+    },
+  ];
+
+  // Update button states when selection changes
+  useEffect(() => {
+    const handleSelectionChange = () => {
+      // Force a re-render to update toolbar button states
+      setSelectedObject(fabricCanvasRef.current?.getActiveObject() || null);
+    };
+
+    if (fabricCanvasRef.current) {
+      fabricCanvasRef.current.on('selection:created', handleSelectionChange);
+      fabricCanvasRef.current.on('selection:updated', handleSelectionChange);
+      fabricCanvasRef.current.on('selection:cleared', handleSelectionChange);
+    }
+
+    return () => {
+      if (fabricCanvasRef.current) {
+        fabricCanvasRef.current.off('selection:created', handleSelectionChange);
+        fabricCanvasRef.current.off('selection:updated', handleSelectionChange);
+        fabricCanvasRef.current.off('selection:cleared', handleSelectionChange);
+      }
+    };
+  }, []);
+
+  return (
+    <div className="flex h-screen overflow-hidden">
+      {/* Left Sidebar */}
+      <div className="flex-1 flex">
+        {/* Top Controls */}
+        <div className="absolute top-4 left-1/2 transform -translate-x-1/2 z-20 flex items-center space-x-4">
+          {/* Canvas Size Selector */}
+          <Select
+            value={Object.keys(canvasSizePresets).find(
+              key => 
+                canvasSizePresets[key as keyof typeof canvasSizePresets].width === canvasSize.width && 
+                canvasSizePresets[key as keyof typeof canvasSizePresets].height === canvasSize.height
+            )}
+            onValueChange={(value: keyof typeof canvasSizePresets) => handleCanvasSizeChange(value)}
+          >
+            <SelectTrigger className="w-[180px] bg-gray-800/90 backdrop-blur-lg border-purple-500/20">
+              <SelectValue placeholder="Select size" />
+            </SelectTrigger>
+            <SelectContent>
+              {Object.keys(canvasSizePresets).map((preset) => (
+                <SelectItem key={preset} value={preset}>
+                  {preset} ({canvasSizePresets[preset as keyof typeof canvasSizePresets].width}x
+                  {canvasSizePresets[preset as keyof typeof canvasSizePresets].height})
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Toolbar */}
+          <div className="bg-gray-800/90 backdrop-blur-lg rounded-lg p-1 flex items-center space-x-1">
+            {toolbarButtons.map((button, index) => {
+              if (button.label === 'Shapes') {
+                return (
+                  <ShapePopover
+                    key={index}
+                    selectedShape={selectedShape}
+                    onShapeSelect={handleShapeSelect}
+                    trigger={
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        className="group relative hover:bg-purple-500/20 hover:scale-105 transition-all duration-200 ease-in-out"
+                      >
+                        <button.icon className="h-4 w-4 transition-transform group-hover:scale-110" />
+                      </Button>
+                    }
+                  />
+                );
+              }
+
+              if (button.component) {
+                return <React.Fragment key={index}>{button.component}</React.Fragment>;
+              }
+
+              return (
+                <TooltipProvider key={index}>
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={button.onClick}
+                        disabled={button.disabled}
+                        className={cn(
+                          'group relative hover:bg-purple-500/20 hover:scale-105 transition-all duration-200 ease-in-out',
+                          selectedTool === button.label.toLowerCase() && 'bg-purple-500/20',
+                          button.disabled && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:scale-100'
+                        )}
+                      >
+                        <button.icon className="h-4 w-4 transition-transform group-hover:scale-110" />
+                      </Button>
+                    </TooltipTrigger>
+                    <TooltipContent
+                      side="bottom"
+                      align="center"
+                      className="bg-gray-800 text-white border-purple-500/20"
+                    >
+                      <p>{button.tooltip || button.label}</p>
+                    </TooltipContent>
+                  </Tooltip>
+                </TooltipProvider>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Canvas Container */}
+        <div
+          ref={canvasContainerRef}
+          className={cn(
+            "w-full h-full relative",
+            isDragging ? "cursor-grabbing" : selectedTool === 'move' ? "cursor-grab" : "cursor-default",
+            "bg-gradient-to-br from-gray-900/50 via-gray-800/30 to-gray-900/50"
+          )}
+          onWheel={(e) => {
+            if (e.ctrlKey || e.metaKey) {
+              e.preventDefault();
+              const delta = e.deltaY;
+              const point = fabricCanvasRef.current?.getPointer(e);
+              const newZoom = Math.min(Math.max(zoomLevel - delta / 2, 10), 400);
+              
+              if (point && fabricCanvasRef.current) {
+                fabricCanvasRef.current.zoomToPoint(
+                  new fabric.Point(point.x, point.y),
+                  newZoom / 100
+                );
+                setZoomLevel(newZoom);
+                fabricCanvasRef.current.requestRenderAll();
+              }
+            }
+          }}
+        >
+          {/* Canvas with Shadow and Border */}
+          <div 
+            className="absolute transition-transform duration-200"
+            style={{
+              transform: `scale(${zoomLevel / 100})`,
+              transformOrigin: 'center',
+              width: canvasSize.width,
+              height: canvasSize.height,
+              left: `calc(50% - ${canvasSize.width / 2}px)`,
+              top: `calc(50% - ${canvasSize.height / 2}px)`,
+            }}
+          >
+            <div className="absolute inset-0 bg-white rounded-sm shadow-[0_0_40px_rgba(0,0,0,0.3)]">
+              <canvas ref={canvasRef} className="absolute inset-0" />
+            </div>
+          </div>
+
+          {/* Rulers */}
+          <div className="absolute top-0 left-0 w-full h-6 bg-gray-800/80 backdrop-blur-sm border-b border-purple-500/10" />
+          <div className="absolute top-0 left-0 w-6 h-full bg-gray-800/80 backdrop-blur-sm border-r border-purple-500/10" />
+        </div>
+
+        {/* Bottom Controls with Zoom */}
+        <div className="absolute bottom-4 left-1/2 transform -translate-x-1/2 flex items-center space-x-4 bg-gray-800/90 backdrop-blur-lg rounded-lg px-3 py-1.5 text-sm border border-purple-500/10">
+          {/* Canvas Size */}
+          <div className="flex items-center space-x-2">
+            <span>{canvasSize.width} × {canvasSize.height}</span>
+          </div>
+
+          <Separator orientation="vertical" className="h-4 bg-purple-500/20" />
+
+          {/* Zoom Controls */}
+          <div className="flex items-center space-x-2">
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => handleZoom(zoomLevel - 10)}
+              disabled={zoomLevel <= 10}
+            >
+              <Minus className="h-3 w-3" />
+            </Button>
+
+            <Select
+              value={zoomLevel.toString()}
+              onValueChange={(value) => handleZoom(Number(value))}
+            >
+              <SelectTrigger className="w-[85px] h-6 px-2 bg-transparent border-none">
+                <SelectValue>
+                  {Math.round(zoomLevel)}%
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent>
+                {[10, 25, 50, 75, 100, 125, 150, 200, 300, 400].map((zoom) => (
+                  <SelectItem key={zoom} value={zoom.toString()}>
+                    {zoom}%
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => handleZoom(zoomLevel + 10)}
+              disabled={zoomLevel >= 400}
+            >
+              <Plus className="h-3 w-3" />
+            </Button>
+
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-6 w-6"
+                  onClick={() => {
+                    if (!canvasContainerRef.current || !fabricCanvasRef.current) return;
+                    
+                    const container = canvasContainerRef.current;
+                    const containerWidth = container.clientWidth;
+                    const containerHeight = container.clientHeight;
+                    
+                    const scaleX = (containerWidth - 100) / canvasSize.width;
+                    const scaleY = (containerHeight - 100) / canvasSize.height;
+                    const scale = Math.min(scaleX, scaleY, 1);
+                    
+                    handleZoom(scale * 100);
+                  }}
+                >
+                  <Maximize2 className="h-3 w-3" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent side="top">
+                Fit to screen
+              </TooltipContent>
+            </Tooltip>
+          </div>
+        </div>
+      </div>
+
+      {/* Right Sidebar */}
+      <div
+        className={cn(
+          "w-80 bg-background border-l border-border transition-all duration-300 ease-in-out",
+          isRightSidebarOpen ? "translate-x-0" : "translate-x-full"
+        )}
+      >
+        <div className="h-full flex flex-col">
+          <div className="flex-1 overflow-hidden">
+            <Tabs defaultValue="properties" className="h-full">
+              <TabsList className="w-full">
+                <TabsTrigger value="properties">Properties</TabsTrigger>
+                <TabsTrigger value="layers">Layers</TabsTrigger>
+              </TabsList>
+              <TabsContent value="properties" className="h-[calc(100%-2rem)] overflow-auto">
+                {selectedObject && (
+                  <ShapeEditor
+                    selectedObject={selectedObject}
+                    canvas={fabricCanvasRef.current}
+                    onSave={saveToHistory}
+                  />
+                )}
+              </TabsContent>
+              <TabsContent value="layers" className="h-[calc(100%-2rem)] overflow-hidden">
+                <LayerMenu
+                  canvas={fabricCanvasRef.current}
+                  onGroup={handleGroup}
+                  onUngroup={handleUngroup}
+                  selectedObject={selectedObject}
+                  onSaveHistory={saveToHistory}
+                />
+              </TabsContent>
+            </Tabs>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+export default BrandCanvas;
