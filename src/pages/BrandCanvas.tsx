@@ -59,10 +59,13 @@ import TextEditor from '@/components/canvas/TextEditor';
 import ShapeEditor from '@/components/canvas/ShapeEditor';
 import ShapePopover from '@/components/canvas/ShapePopover';
 import ImagePopover from '@/components/canvas/ImagePopover';
+import MediaPopover from '@/components/canvas/MediaPopover';
+import MediaEditor from '@/components/canvas/MediaEditor';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Separator } from '@/components/ui/separator';
 import { LayerMenu } from '@/components/canvas/LayerMenu';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import CanvasTimeline from '@/components/canvas/CanvasTimeline';
 
 const BrandCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -70,8 +73,6 @@ const BrandCanvas: React.FC = () => {
   const fabricCanvasRef = useRef<fabric.Canvas | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedObject, setSelectedObject] = useState<fabric.Object | null>(null);
-  const [canvasHistory, setCanvasHistory] = useState<string[]>([]);
-  const [currentHistoryIndex, setCurrentHistoryIndex] = useState(-1);
   const [canvasSize, setCanvasSize] = useState({ width: 1080, height: 1080 });
   const [zoomLevel, setZoomLevel] = useState(100);
   const [selectedShape, setSelectedShape] = useState('rect');
@@ -81,10 +82,12 @@ const BrandCanvas: React.FC = () => {
   const lastMousePosition = useRef({ x: 0, y: 0 });
   const [undoStack, setUndoStack] = useState<string[]>([]);
   const [redoStack, setRedoStack] = useState<string[]>([]);
+  const isUndoRedoOperation = useRef(false);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(false);
   const [isLeftSidebarOpen, setIsLeftSidebarOpen] = useState(true);
   const [isMobile, setIsMobile] = useState(false);
   const [showTimeline, setShowTimeline] = useState(false);
+  const [selectedMediaType, setSelectedMediaType] = useState<'image' | 'video' | 'audio' | null>(null);
 
   // Predefined canvas sizes
   const canvasSizePresets = {
@@ -110,19 +113,25 @@ const BrandCanvas: React.FC = () => {
 
       const canvas = fabricCanvasRef.current;
 
-      // Event listeners
+      // Event listeners - only save history when not in the middle of undo/redo
       const handleModified = () => {
-        saveToHistory();
+        if (!isUndoRedoOperation.current) {
+          saveToHistory();
+        }
         canvas.requestRenderAll();
       };
 
       const handleAdded = () => {
-        saveToHistory();
+        if (!isUndoRedoOperation.current) {
+          saveToHistory();
+        }
         canvas.requestRenderAll();
       };
 
       const handleRemoved = () => {
-        saveToHistory();
+        if (!isUndoRedoOperation.current) {
+          saveToHistory();
+        }
         canvas.requestRenderAll();
       };
 
@@ -133,22 +142,83 @@ const BrandCanvas: React.FC = () => {
       // Selection events
       canvas.on('selection:created', (e: fabric.IEvent) => {
         if (!e.selected) return;
-        setSelectedObject(e.selected[0]);
+        const selectedObj = e.selected[0];
+        setSelectedObject(selectedObj);
+
+        // Determine the media type
+        if (selectedObj.data?.type === 'video') {
+          setSelectedMediaType('video');
+        } else if (selectedObj.data?.type === 'audio') {
+          setSelectedMediaType('audio');
+        } else if (selectedObj.type === 'image') {
+          setSelectedMediaType('image');
+        } else {
+          setSelectedMediaType(null);
+        }
+
         setIsRightSidebarOpen(true);
       });
 
       canvas.on('selection:updated', (e: fabric.IEvent) => {
         if (!e.selected) return;
-        setSelectedObject(e.selected[0]);
+        const selectedObj = e.selected[0];
+        setSelectedObject(selectedObj);
+
+        // Determine the media type
+        if (selectedObj.data?.type === 'video') {
+          setSelectedMediaType('video');
+        } else if (selectedObj.data?.type === 'audio') {
+          setSelectedMediaType('audio');
+        } else if (selectedObj.type === 'image') {
+          setSelectedMediaType('image');
+        } else {
+          setSelectedMediaType(null);
+        }
+
         setIsRightSidebarOpen(true);
       });
 
       canvas.on('selection:cleared', () => {
         setSelectedObject(null);
+        setSelectedMediaType(null);
       });
 
-      // Initial history state
-      saveToHistory();
+      // Initialize with blank canvas state
+      const initialJson = JSON.stringify(canvas.toJSON());
+      setUndoStack([initialJson]);
+      setRedoStack([]);
+
+      // Cleanup media elements when objects are removed
+      canvas.on('object:removed', (e: fabric.IEvent) => {
+        const removedObject = e.target;
+        if (!removedObject) return;
+
+        // Check if it's a media object
+        if (removedObject.data?.type === 'video' || removedObject.data?.type === 'audio') {
+          // Get the media element
+          const mediaElement = (removedObject as any).mediaElement as HTMLVideoElement | HTMLAudioElement;
+
+          if (mediaElement) {
+            // Pause playback
+            mediaElement.pause();
+
+            // Reset src to release resources
+            mediaElement.src = '';
+
+            // Remove any event listeners
+            mediaElement.onloadedmetadata = null;
+            mediaElement.onerror = null;
+
+            // Release object URL if it was created
+            if ((removedObject as any).file) {
+              const objectURL = mediaElement.src;
+              if (objectURL.startsWith('blob:')) {
+                URL.revokeObjectURL(objectURL);
+              }
+            }
+          }
+        }
+      });
 
       // Cleanup
       return () => {
@@ -190,69 +260,130 @@ const BrandCanvas: React.FC = () => {
     setSelectedObject(null);
   };
 
+  // Improved saveToHistory function
   const saveToHistory = () => {
     if (fabricCanvasRef.current) {
       const json = JSON.stringify(fabricCanvasRef.current.toJSON());
-      setCanvasHistory(prev => {
-        const newHistory = [...prev.slice(0, currentHistoryIndex + 1), json];
-        if (newHistory.length > 50) newHistory.shift(); // Limit history size
-        return newHistory;
+
+      // If the current state is the same as the last state, don't save it
+      if (undoStack.length > 0 && json === undoStack[undoStack.length - 1]) {
+        return;
+      }
+
+      // Add current state to undo stack
+      setUndoStack(prev => {
+        const newStack = [...prev, json];
+        // Limit stack size to prevent memory issues
+        if (newStack.length > 50) {
+          return newStack.slice(newStack.length - 50);
+        }
+        return newStack;
       });
-      setCurrentHistoryIndex(prev => prev + 1);
+
+      // Clear redo stack when a new action is performed
+      if (redoStack.length > 0) {
+        setRedoStack([]);
+      }
     }
   };
 
-  // Undo function
+  // Improved handleUndo function
   const handleUndo = () => {
-    if (!fabricCanvasRef.current || currentHistoryIndex < 1) return;
+    if (!fabricCanvasRef.current || undoStack.length < 2) return;
 
-    const previousState = canvasHistory[currentHistoryIndex - 1];
+    // Set flag to prevent event handlers from saving history
+    isUndoRedoOperation.current = true;
 
-    fabricCanvasRef.current.loadFromJSON(previousState, () => {
-      fabricCanvasRef.current?.renderAll();
-    });
+    try {
+      // Get the current state before undoing
+      const currentState = undoStack[undoStack.length - 1];
 
-    setCurrentHistoryIndex(prev => prev - 1);
+      // Get the previous state to restore
+      const previousState = undoStack[undoStack.length - 2];
+
+      // Update stacks
+      setUndoStack(prev => prev.slice(0, -1));
+      setRedoStack(prev => [...prev, currentState]);
+
+      // Restore canvas to previous state
+      fabricCanvasRef.current.loadFromJSON(previousState, () => {
+        fabricCanvasRef.current?.renderAll();
+        // Reset flag after rendering is complete
+        isUndoRedoOperation.current = false;
+      });
+    } catch (error) {
+      console.error("Error in handleUndo:", error);
+      isUndoRedoOperation.current = false;
+    }
   };
 
-  // Redo function
+  // Improved handleRedo function
   const handleRedo = () => {
-    if (!fabricCanvasRef.current || currentHistoryIndex >= canvasHistory.length - 1) return;
+    if (!fabricCanvasRef.current || redoStack.length === 0) return;
 
-    const nextState = canvasHistory[currentHistoryIndex + 1];
+    // Set flag to prevent event handlers from saving history
+    isUndoRedoOperation.current = true;
 
-    fabricCanvasRef.current.loadFromJSON(nextState, () => {
-      fabricCanvasRef.current?.renderAll();
-    });
+    try {
+      // Get the next state to restore
+      const nextState = redoStack[redoStack.length - 1];
 
-    setCurrentHistoryIndex(prev => prev + 1);
+      // Update stacks
+      setRedoStack(prev => prev.slice(0, -1));
+      setUndoStack(prev => [...prev, nextState]);
+
+      // Restore canvas to next state
+      fabricCanvasRef.current.loadFromJSON(nextState, () => {
+        fabricCanvasRef.current?.renderAll();
+        // Reset flag after rendering is complete
+        isUndoRedoOperation.current = false;
+      });
+    } catch (error) {
+      console.error("Error in handleRedo:", error);
+      isUndoRedoOperation.current = false;
+    }
   };
 
-  // Handle keyboard shortcuts
+  // Improved keyboard shortcuts handling
   useEffect(() => {
     const handleKeyboard = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z') {
+      // Don't process if an input element is focused
+      if (e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement) {
+        return;
+      }
+
+      // Undo: Ctrl+Z
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'z' && !e.shiftKey) {
         e.preventDefault();
-        if (e.shiftKey) {
-          handleRedo();
-        } else {
-          handleUndo();
-        }
-      } else if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') {
+        handleUndo();
+      }
+      // Redo: Ctrl+Y or Ctrl+Shift+Z
+      else if (
+        ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'y') ||
+        ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key.toLowerCase() === 'z')
+      ) {
         e.preventDefault();
         handleRedo();
-      } else if (e.ctrlKey && e.key === 'g') {
+      }
+      // Group: Ctrl+G
+      else if ((e.ctrlKey || e.metaKey) && e.key === 'g' && !e.shiftKey) {
         e.preventDefault();
         handleGroup();
-      } else if (e.ctrlKey && e.shiftKey && e.key === 'G') {
+      }
+      // Ungroup: Ctrl+Shift+G
+      else if ((e.ctrlKey || e.metaKey) && e.shiftKey && e.key === 'g') {
         e.preventDefault();
         handleUngroup();
       }
     };
 
     window.addEventListener('keydown', handleKeyboard);
-    return () => window.removeEventListener('keydown', handleKeyboard);
-  }, []);
+    return () => {
+      window.removeEventListener('keydown', handleKeyboard);
+    };
+  }, []); // No dependencies needed as we're using refs and function references
 
   // Update canvas scale
   const updateCanvasScale = () => {
@@ -263,9 +394,9 @@ const BrandCanvas: React.FC = () => {
       const scaleX = (containerWidth - 40) / canvasSize.width;
       const scaleY = (containerHeight - 40) / canvasSize.height;
       const scale = Math.min(scaleX, scaleY);
-      
+
       setZoomLevel(Math.round(scale * 100));
-      
+
       // Update viewport transform to maintain center position
       const vpt = fabricCanvasRef.current.viewportTransform;
       if (vpt) {
@@ -273,7 +404,7 @@ const BrandCanvas: React.FC = () => {
         const currentCenterY = -vpt[5] / vpt[0] + containerHeight / (2 * vpt[0]);
 
         fabricCanvasRef.current.setZoom(scale);
-        
+
         const newVpt = fabricCanvasRef.current.viewportTransform;
         if (newVpt) {
           newVpt[4] = -currentCenterX * scale + containerWidth / 2;
@@ -290,7 +421,7 @@ const BrandCanvas: React.FC = () => {
   const handleZoom = (newZoom: number) => {
     const zoom = Math.min(Math.max(newZoom, 10), 400);
     setZoomLevel(zoom);
-    
+
     if (fabricCanvasRef.current) {
       const center = fabricCanvasRef.current.getCenter();
       fabricCanvasRef.current.zoomToPoint(
@@ -467,7 +598,7 @@ const BrandCanvas: React.FC = () => {
         if (!fabricCanvasRef.current) return;
 
         const canvas = fabricCanvasRef.current;
-        
+
         // Store file information
         (img as any).file = file;
         img.data = { name: file.name };
@@ -486,11 +617,156 @@ const BrandCanvas: React.FC = () => {
         canvas.centerObject(img);
         canvas.requestRenderAll();
         setSelectedObject(img);
+        setSelectedMediaType('image');
         setIsRightSidebarOpen(true);
         saveToHistory();
       });
     };
     reader.readAsDataURL(file);
+  };
+
+  // Handle video upload
+  const handleVideoUpload = (file: File) => {
+    if (!fabricCanvasRef.current) return;
+
+    const canvas = fabricCanvasRef.current;
+
+    // Create a video element
+    const videoEl = document.createElement('video');
+    videoEl.controls = false; // We'll use our custom controls
+    videoEl.crossOrigin = 'anonymous';
+    videoEl.width = 640;
+    videoEl.height = 360;
+    videoEl.src = URL.createObjectURL(file);
+
+    // Set additional attributes
+    videoEl.loop = false;
+    videoEl.muted = false;
+
+    // Wait for the video to be loaded
+    videoEl.onloadedmetadata = () => {
+      // Create a fabric.js video object
+      const fabricVideo = new fabric.Image(videoEl, {
+        left: canvasSize.width / 2,
+        top: canvasSize.height / 2,
+        originX: 'center',
+        originY: 'center',
+        objectCaching: false,
+      });
+
+      // Scale video to reasonable size if needed
+      const maxSize = 500;
+      if (videoEl.width > maxSize || videoEl.height > maxSize) {
+        const scale = maxSize / Math.max(videoEl.width, videoEl.height);
+        fabricVideo.scale(scale);
+      }
+
+      // Store video element and file info
+      (fabricVideo as any).mediaElement = videoEl;
+      (fabricVideo as any).file = file;
+      fabricVideo.data = {
+        name: file.name,
+        type: 'video'
+      };
+
+      // Add to canvas
+      canvas.add(fabricVideo);
+      canvas.setActiveObject(fabricVideo);
+      canvas.renderAll();
+
+      // Update state
+      setSelectedObject(fabricVideo);
+      setSelectedMediaType('video');
+      setIsRightSidebarOpen(true);
+      saveToHistory();
+    };
+
+    // Handle errors
+    videoEl.onerror = () => {
+      console.error('Error loading video');
+    };
+
+    // Load the video
+    videoEl.load();
+  };
+
+  // Handle audio upload
+  const handleAudioUpload = (file: File) => {
+    if (!fabricCanvasRef.current) return;
+
+    const canvas = fabricCanvasRef.current;
+
+    // Create an audio element
+    const audioEl = document.createElement('audio');
+    audioEl.controls = false; // We'll use our custom controls
+    audioEl.crossOrigin = 'anonymous';
+    audioEl.src = URL.createObjectURL(file);
+
+    // Set additional attributes
+    audioEl.loop = false;
+    audioEl.muted = false;
+
+    // Wait for the audio to be loaded
+    audioEl.onloadedmetadata = () => {
+      // Create a simple rectangle to represent audio
+      const rect = new fabric.Rect({
+        left: canvasSize.width / 2,
+        top: canvasSize.height / 2,
+        width: 180,
+        height: 60,
+        fill: 'purple',
+        opacity: 0.8,
+        rx: 10,
+        ry: 10,
+        originX: 'center',
+        originY: 'center',
+      });
+
+      // Add text label with filename
+      const label = new fabric.Text(file.name.length > 20 ? file.name.substring(0, 17) + '...' : file.name, {
+        fontSize: 14,
+        fill: 'white',
+        originX: 'center',
+        originY: 'center',
+        left: 0,
+        top: 0,
+      });
+
+      // Create a group with the rectangle and label
+      const group = new fabric.Group([rect, label], {
+        left: canvasSize.width / 2,
+        top: canvasSize.height / 2,
+        originX: 'center',
+        originY: 'center',
+      });
+
+      // Store audio element and file info
+      (group as any).mediaElement = audioEl;
+      (group as any).file = file;
+      group.data = {
+        name: file.name,
+        type: 'audio'
+      };
+
+      // Add to canvas
+      canvas.add(group);
+      canvas.setActiveObject(group);
+      canvas.renderAll();
+
+      // Update state
+      setSelectedObject(group);
+      setSelectedMediaType('audio');
+      setIsRightSidebarOpen(true);
+      saveToHistory();
+    };
+
+    // Handle errors
+    audioEl.onerror = () => {
+      console.error('Error loading audio');
+    };
+
+    // Load the audio
+    audioEl.load();
   };
 
   // Handle Nyx asset selection
@@ -521,7 +797,7 @@ const BrandCanvas: React.FC = () => {
   // Group selected objects
   const handleGroup = () => {
     if (!fabricCanvasRef.current) return;
-    
+
     const canvas = fabricCanvasRef.current;
     const activeSelection = canvas.getActiveObject();
 
@@ -538,7 +814,7 @@ const BrandCanvas: React.FC = () => {
   // Ungroup selected group
   const handleUngroup = () => {
     if (!fabricCanvasRef.current) return;
-    
+
     const canvas = fabricCanvasRef.current;
     const activeObject = canvas.getActiveObject();
 
@@ -547,10 +823,10 @@ const BrandCanvas: React.FC = () => {
       const items = (activeObject as fabric.Group).getObjects();
       (activeObject as fabric.Group).destroy();
       canvas.remove(activeObject);
-      
+
       // Add the individual objects back to canvas
       canvas.add(...items);
-      
+
       // Select all the ungrouped objects
       canvas.setActiveObject(new fabric.ActiveSelection(items, { canvas }));
       canvas.requestRenderAll();
@@ -558,15 +834,37 @@ const BrandCanvas: React.FC = () => {
     }
   };
 
+  // Handle canvas size change
+  const handleCanvasSizeChange = (preset: keyof typeof canvasSizePresets) => {
+    const newSize = canvasSizePresets[preset];
+    setCanvasSize(newSize);
+
+    // Save current canvas state
+    if (fabricCanvasRef.current) {
+      const currentState = fabricCanvasRef.current.toJSON();
+
+      // Create new canvas with new dimensions
+      fabricCanvasRef.current.setDimensions({
+        width: newSize.width,
+        height: newSize.height
+      });
+
+      // Restore canvas state
+      fabricCanvasRef.current.loadFromJSON(currentState, () => {
+        fabricCanvasRef.current?.renderAll();
+      });
+    }
+  };
+
   const toolbarButtons = [
     { icon: MousePointerClick, label: 'Select', onClick: () => setSelectedTool('select') },
     { icon: Move, label: 'Move', onClick: () => setSelectedTool('move') },
     { icon: Square, label: 'Shapes' },
-    { 
-      icon: ImageIcon, 
-      label: 'Images',
+    {
+      icon: ImageIcon,
+      label: 'Media',
       component: (
-        <ImagePopover
+        <MediaPopover
           trigger={
             <Button
               variant="ghost"
@@ -577,28 +875,30 @@ const BrandCanvas: React.FC = () => {
             </Button>
           }
           onImageSelect={handleImageUpload}
+          onVideoSelect={handleVideoUpload}
+          onAudioSelect={handleAudioUpload}
           onNyxAssetSelect={handleNyxAssetSelect}
         />
       )
     },
     { icon: Type, label: 'Text', onClick: handleAddText },
-    { 
-      icon: Group, 
-      label: 'Group', 
+    {
+      icon: Group,
+      label: 'Group',
       onClick: handleGroup,
       disabled: !fabricCanvasRef.current?.getActiveObject()?.type?.includes('activeSelection'),
       tooltip: 'Group Objects (Ctrl+G)'
     },
-    { 
-      icon: Ungroup, 
-      label: 'Ungroup', 
+    {
+      icon: Ungroup,
+      label: 'Ungroup',
       onClick: handleUngroup,
       disabled: !fabricCanvasRef.current?.getActiveObject()?.type?.includes('group'),
       tooltip: 'Ungroup Objects (Ctrl+Shift+G)'
     },
-    { 
-      icon: Trash2, 
-      label: 'Delete', 
+    {
+      icon: Trash2,
+      label: 'Delete',
       onClick: () => {
         if (fabricCanvasRef.current && fabricCanvasRef.current.getActiveObject()) {
           fabricCanvasRef.current.remove(fabricCanvasRef.current.getActiveObject());
@@ -609,19 +909,26 @@ const BrandCanvas: React.FC = () => {
       disabled: !fabricCanvasRef.current?.getActiveObject(),
       tooltip: 'Delete (Del)'
     },
-    { 
-      icon: Undo, 
-      label: 'Undo', 
-      onClick: handleUndo, 
-      disabled: currentHistoryIndex < 1,
+    {
+      icon: Undo,
+      label: 'Undo',
+      onClick: handleUndo,
+      disabled: undoStack.length < 2,
       tooltip: 'Undo (Ctrl+Z)'
     },
-    { 
-      icon: Redo, 
-      label: 'Redo', 
-      onClick: handleRedo, 
-      disabled: currentHistoryIndex >= canvasHistory.length - 1,
+    {
+      icon: Redo,
+      label: 'Redo',
+      onClick: handleRedo,
+      disabled: redoStack.length === 0,
       tooltip: 'Redo (Ctrl+Y)'
+    },
+    {
+      icon: Clock,
+      label: 'Timeline',
+      onClick: () => setShowTimeline(!showTimeline),
+      tooltip: 'Toggle Timeline',
+      className: showTimeline ? 'bg-purple-500/30' : '',
     },
   ];
 
@@ -656,8 +963,8 @@ const BrandCanvas: React.FC = () => {
           {/* Canvas Size Selector */}
           <Select
             value={Object.keys(canvasSizePresets).find(
-              key => 
-                canvasSizePresets[key as keyof typeof canvasSizePresets].width === canvasSize.width && 
+              key =>
+                canvasSizePresets[key as keyof typeof canvasSizePresets].width === canvasSize.width &&
                 canvasSizePresets[key as keyof typeof canvasSizePresets].height === canvasSize.height
             )}
             onValueChange={(value: keyof typeof canvasSizePresets) => handleCanvasSizeChange(value)}
@@ -713,7 +1020,8 @@ const BrandCanvas: React.FC = () => {
                         className={cn(
                           'group relative hover:bg-purple-500/20 hover:scale-105 transition-all duration-200 ease-in-out',
                           selectedTool === button.label.toLowerCase() && 'bg-purple-500/20',
-                          button.disabled && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:scale-100'
+                          button.disabled && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:scale-100',
+                          button.className
                         )}
                       >
                         <button.icon className="h-4 w-4 transition-transform group-hover:scale-110" />
@@ -747,7 +1055,7 @@ const BrandCanvas: React.FC = () => {
               const delta = e.deltaY;
               const point = fabricCanvasRef.current?.getPointer(e);
               const newZoom = Math.min(Math.max(zoomLevel - delta / 2, 10), 400);
-              
+
               if (point && fabricCanvasRef.current) {
                 fabricCanvasRef.current.zoomToPoint(
                   new fabric.Point(point.x, point.y),
@@ -760,7 +1068,7 @@ const BrandCanvas: React.FC = () => {
           }}
         >
           {/* Canvas with Shadow and Border */}
-          <div 
+          <div
             className="absolute transition-transform duration-200"
             style={{
               transform: `scale(${zoomLevel / 100})`,
@@ -838,15 +1146,15 @@ const BrandCanvas: React.FC = () => {
                   className="h-6 w-6"
                   onClick={() => {
                     if (!canvasContainerRef.current || !fabricCanvasRef.current) return;
-                    
+
                     const container = canvasContainerRef.current;
                     const containerWidth = container.clientWidth;
                     const containerHeight = container.clientHeight;
-                    
+
                     const scaleX = (containerWidth - 100) / canvasSize.width;
                     const scaleY = (containerHeight - 100) / canvasSize.height;
                     const scale = Math.min(scaleX, scaleY, 1);
-                    
+
                     handleZoom(scale * 100);
                   }}
                 >
@@ -864,39 +1172,72 @@ const BrandCanvas: React.FC = () => {
       {/* Right Sidebar */}
       <div
         className={cn(
-          "w-80 bg-background border-l border-border transition-all duration-300 ease-in-out",
+          "w-72 bg-gray-800/90 backdrop-blur-lg border-purple-500/20 fixed right-0 top-0 bottom-0 transform transition-all duration-300 z-10",
           isRightSidebarOpen ? "translate-x-0" : "translate-x-full"
         )}
       >
-        <div className="h-full flex flex-col">
-          <div className="flex-1 overflow-hidden">
-            <Tabs defaultValue="properties" className="h-full">
-              <TabsList className="w-full">
-                <TabsTrigger value="properties">Properties</TabsTrigger>
-                <TabsTrigger value="layers">Layers</TabsTrigger>
-              </TabsList>
-              <TabsContent value="properties" className="h-[calc(100%-2rem)] overflow-auto">
-                {selectedObject && (
+        <div className="h-full">
+          <div className="h-16 border-b border-gray-700 flex items-center justify-between px-4">
+            <h3 className="text-lg font-semibold text-white">Properties</h3>
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setIsRightSidebarOpen(false)}
+              className="hover:bg-gray-700"
+            >
+              <ChevronRight className="h-5 w-5" />
+            </Button>
+          </div>
+
+          {selectedObject && (
+            <>
+              {selectedMediaType === 'video' && (
+                <MediaEditor
+                  selectedObject={selectedObject}
+                  canvas={fabricCanvasRef.current}
+                  onSave={saveToHistory}
+                  type="video"
+                />
+              )}
+              {selectedMediaType === 'audio' && (
+                <MediaEditor
+                  selectedObject={selectedObject}
+                  canvas={fabricCanvasRef.current}
+                  onSave={saveToHistory}
+                  type="audio"
+                />
+              )}
+              {selectedObject.type === 'i-text' && (
+                <TextEditor
+                  selectedObject={selectedObject as fabric.IText}
+                  canvas={fabricCanvasRef.current}
+                />
+              )}
+              {(selectedObject.type === 'rect' ||
+                selectedObject.type === 'circle' ||
+                selectedObject.type === 'triangle' ||
+                selectedObject.type === 'polygon' ||
+                selectedObject.type === 'path' ||
+                (selectedObject.type === 'image' && selectedMediaType !== 'video')) && (
                   <ShapeEditor
                     selectedObject={selectedObject}
                     canvas={fabricCanvasRef.current}
                     onSave={saveToHistory}
                   />
                 )}
-              </TabsContent>
-              <TabsContent value="layers" className="h-[calc(100%-2rem)] overflow-hidden">
-                <LayerMenu
-                  canvas={fabricCanvasRef.current}
-                  onGroup={handleGroup}
-                  onUngroup={handleUngroup}
-                  selectedObject={selectedObject}
-                  onSaveHistory={saveToHistory}
-                />
-              </TabsContent>
-            </Tabs>
-          </div>
+            </>
+          )}
         </div>
       </div>
+
+      {/* Canvas Timeline */}
+      {(fabricCanvasRef.current && (
+        <CanvasTimeline
+          canvas={fabricCanvasRef.current}
+          visible={showTimeline}
+          onToggle={() => setShowTimeline(!showTimeline)}
+        />
+      ))}
     </div>
   );
 };

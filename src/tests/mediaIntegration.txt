@@ -1,0 +1,45 @@
+# Media Feature Testing
+
+This document outlines how to test the video and audio integration in BrandCanvas.
+
+## Video Upload Testing
+
+1. Navigate to BrandCanvas (/brand-canvas route)
+2. Click on the Media icon in the toolbar
+3. Select the "Video" tab in the popover
+4. Click "Upload Video" and select a video file
+5. The video should be added to the canvas
+6. When selected, the right sidebar should show the video properties and MediaEditor
+7. Test playback controls (play, pause, seek, volume)
+8. Test property adjustments (opacity, size, rotation, flip)
+9. Test layer ordering (bring to front, send to back)
+
+## Audio Upload Testing
+
+1. Navigate to BrandCanvas (/brand-canvas route)
+2. Click on the Media icon in the toolbar
+3. Select the "Audio" tab in the popover
+4. Click "Upload Audio" and select an audio file
+5. An audio element should be added to the canvas (purple rectangle with file name)
+6. When selected, the right sidebar should show the audio properties and MediaEditor
+7. Test playback controls (play, pause, seek, volume)
+8. Test property adjustments (opacity, rotation)
+9. Test layer ordering (bring to front, send to back)
+
+## Expected Behavior
+
+- Videos should display their content and play when the play button is clicked
+- Audio should play when the play button is clicked
+- The timeline should show accurate progress
+- Volume controls should work properly
+- Media elements should be movable, resizable (for video), and rotatable on the canvas
+- Media properties should be editable in the right sidebar
+- Undo/Redo should work properly with media elements
+
+## Notes
+
+- Large video files may take longer to load
+- Supported formats depend on the browser's HTML5 video/audio support
+- Common supported formats:
+  - Video: MP4, WebM, Ogg
+  - Audio: MP3, WAV, Ogg 

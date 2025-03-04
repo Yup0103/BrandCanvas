@@ -207,9 +207,8 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
             {stops.map((stop, index) => (
               <div
                 key={index}
-                className={`absolute -translate-x-1/2 group ${
-                  selectedStop === index ? 'z-10' : 'z-0'
-                }`}
+                className={`absolute -translate-x-1/2 group ${selectedStop === index ? 'z-10' : 'z-0'
+                  }`}
                 style={{
                   left: `${stop.offset * 100}%`,
                   top: '0',
@@ -217,15 +216,14 @@ const GradientPicker: React.FC<GradientPickerProps> = ({
                 }}
               >
                 <div
-                  className={`absolute bottom-0 w-4 h-4 -mb-2 rounded-full border-2 cursor-grab active:cursor-grabbing transition-shadow ${
-                    selectedStop === index ? 'border-white shadow-lg' : 'border-gray-400'
-                  }`}
+                  className={`absolute bottom-0 w-4 h-4 -mb-2 rounded-full border-2 cursor-grab active:cursor-grabbing transition-shadow ${selectedStop === index ? 'border-white shadow-lg' : 'border-gray-400'
+                    }`}
                   style={{
                     backgroundColor: stop.color,
                   }}
                   onMouseDown={(e) => handleStopDrag(e, index, e.currentTarget.parentElement?.parentElement as HTMLDivElement)}
                 />
-                
+
                 <div className="absolute -top-6 left-1/2 -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity">
                   <Input
                     type="number"
