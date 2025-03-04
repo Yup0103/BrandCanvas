@@ -630,64 +630,120 @@ const BrandCanvas: React.FC = () => {
     if (!fabricCanvasRef.current) return;
 
     const canvas = fabricCanvasRef.current;
+    setIsLoading(true);
 
     // Create a video element
     const videoEl = document.createElement('video');
-    videoEl.controls = false; // We'll use our custom controls
+    videoEl.controls = false;
     videoEl.crossOrigin = 'anonymous';
-    videoEl.width = 640;
-    videoEl.height = 360;
     videoEl.src = URL.createObjectURL(file);
-
-    // Set additional attributes
-    videoEl.loop = false;
-    videoEl.muted = false;
-
+    
+    // Important: Load first frame
+    videoEl.currentTime = 0;
+    videoEl.muted = true;
+    
     // Wait for the video to be loaded
     videoEl.onloadedmetadata = () => {
-      // Create a fabric.js video object
-      const fabricVideo = new fabric.Image(videoEl, {
-        left: canvasSize.width / 2,
-        top: canvasSize.height / 2,
-        originX: 'center',
-        originY: 'center',
-        objectCaching: false,
+      // First, seek to the first frame  
+      videoEl.play().then(() => {
+        videoEl.pause();
+        
+        // Get the video dimensions
+        const vidWidth = videoEl.videoWidth;
+        const vidHeight = videoEl.videoHeight;
+        
+        // Create a fabric image using the video element
+        const fabricVideo = new fabric.Image(videoEl, {
+          left: canvasSize.width / 2,
+          top: canvasSize.height / 2,
+          originX: 'center',
+          originY: 'center',
+          objectCaching: false,
+          width: vidWidth,
+          height: vidHeight,
+          // Ensure proper source dimensions
+          srcFromAttribute: true,
+        });
+
+        // Scale video to reasonable size while maintaining aspect ratio
+        const maxSize = 500;
+        if (vidWidth > maxSize || vidHeight > maxSize) {
+          const scale = maxSize / Math.max(vidWidth, vidHeight);
+          fabricVideo.scaleX = scale;
+          fabricVideo.scaleY = scale;
+        }
+
+        // Enhance rendering - crucial for fixing the cropping issue
+        const originalRender = fabricVideo._render;
+        fabricVideo._render = function(ctx) {
+          // Draw video with proper source dimensions
+          if (videoEl.readyState >= 2) {
+            ctx.save();
+            // Use native drawImage to ensure proper video rendering
+            ctx.drawImage(
+              videoEl,
+              -this.width / 2,
+              -this.height / 2,
+              this.width,
+              this.height
+            );
+            ctx.restore();
+          } else {
+            // Fallback to original render if video not ready
+            originalRender.call(this, ctx);
+          }
+        };
+
+        // Set up animation for when the video is playing
+        const updateVideoFrame = () => {
+          if (videoEl.paused || videoEl.ended) return;
+          canvas.requestRenderAll();
+          requestAnimationFrame(updateVideoFrame);
+        };
+
+        // Hook up play listener
+        videoEl.addEventListener('play', () => {
+          updateVideoFrame();
+        });
+
+        // Store video element and file info
+        (fabricVideo as any).mediaElement = videoEl;
+        (fabricVideo as any).file = file;
+        (fabricVideo as any).getElement = () => videoEl;
+        fabricVideo.data = {
+          name: file.name,
+          type: 'video',
+          originalWidth: vidWidth,
+          originalHeight: vidHeight,
+          duration: videoEl.duration || 0
+        };
+
+        // Add to canvas
+        canvas.add(fabricVideo);
+        canvas.setActiveObject(fabricVideo);
+        canvas.renderAll();
+        saveToHistory();
+        setIsLoading(false);
+
+        // Automatically open the timeline when adding a video
+        setTimeout(() => {
+          setShowTimeline(true);
+        }, 100);
+        
+        // Force an additional render to ensure first frame appears
+        setTimeout(() => {
+          canvas.requestRenderAll();
+        }, 100);
+      }).catch(err => {
+        console.error("Error playing video to initialize first frame:", err);
+        setIsLoading(false);
       });
-
-      // Scale video to reasonable size if needed
-      const maxSize = 500;
-      if (videoEl.width > maxSize || videoEl.height > maxSize) {
-        const scale = maxSize / Math.max(videoEl.width, videoEl.height);
-        fabricVideo.scale(scale);
-      }
-
-      // Store video element and file info
-      (fabricVideo as any).mediaElement = videoEl;
-      (fabricVideo as any).file = file;
-      fabricVideo.data = {
-        name: file.name,
-        type: 'video'
-      };
-
-      // Add to canvas
-      canvas.add(fabricVideo);
-      canvas.setActiveObject(fabricVideo);
-      canvas.renderAll();
-
-      // Update state
-      setSelectedObject(fabricVideo);
-      setSelectedMediaType('video');
-      setIsRightSidebarOpen(true);
-      saveToHistory();
     };
 
-    // Handle errors
     videoEl.onerror = () => {
-      console.error('Error loading video');
+      console.error("Error loading video");
+      setIsLoading(false);
     };
-
-    // Load the video
-    videoEl.load();
   };
 
   // Handle audio upload
@@ -802,8 +858,9 @@ const BrandCanvas: React.FC = () => {
     const activeSelection = canvas.getActiveObject();
 
     if (activeSelection && activeSelection.type === 'activeSelection') {
-      // Group the objects
-      const group = activeSelection.toGroup();
+      // Group the objects - using the proper fabric.js method with correct type
+      const group = (activeSelection as fabric.ActiveSelection).toGroup();
+      
       // Set the group as the active object
       canvas.setActiveObject(group);
       canvas.requestRenderAll();
@@ -1045,26 +1102,36 @@ const BrandCanvas: React.FC = () => {
         <div
           ref={canvasContainerRef}
           className={cn(
-            "w-full h-full relative",
-            isDragging ? "cursor-grabbing" : selectedTool === 'move' ? "cursor-grab" : "cursor-default",
-            "bg-gradient-to-br from-gray-900/50 via-gray-800/30 to-gray-900/50"
+            "relative flex-1 overflow-auto bg-neutral-900 flex items-center justify-center overflow-hidden",
+            isDragging && "cursor-grabbing"
           )}
-          onWheel={(e) => {
+          onWheel={(e: React.WheelEvent<HTMLDivElement>) => {
             if (e.ctrlKey || e.metaKey) {
               e.preventDefault();
+              if (!fabricCanvasRef.current) return;
+              
               const delta = e.deltaY;
-              const point = fabricCanvasRef.current?.getPointer(e);
-              const newZoom = Math.min(Math.max(zoomLevel - delta / 2, 10), 400);
-
-              if (point && fabricCanvasRef.current) {
-                fabricCanvasRef.current.zoomToPoint(
-                  new fabric.Point(point.x, point.y),
-                  newZoom / 100
-                );
-                setZoomLevel(newZoom);
+              
+              // Create a custom point based on cursor position instead of using getPointer
+              const rect = e.currentTarget.getBoundingClientRect();
+              const x = e.clientX - rect.left;
+              const y = e.clientY - rect.top;
+              const point = new fabric.Point(x, y);
+              
+              // Calculate new zoom level
+              const newZoomLevel = Math.min(Math.max(zoomLevel - delta / 2, 10), 400);
+              
+              // Apply zoom
+              if (fabricCanvasRef.current) {
+                fabricCanvasRef.current.zoomToPoint(point, newZoomLevel / 100);
+                setZoomLevel(newZoomLevel);
                 fabricCanvasRef.current.requestRenderAll();
               }
             }
+          }}
+          onMouseDown={(e) => {
+            // Rest of your existing mousedown handler
+            // ...
           }}
         >
           {/* Canvas with Shadow and Border */}
@@ -1231,13 +1298,23 @@ const BrandCanvas: React.FC = () => {
       </div>
 
       {/* Canvas Timeline */}
-      {(fabricCanvasRef.current && (
-        <CanvasTimeline
-          canvas={fabricCanvasRef.current}
-          visible={showTimeline}
-          onToggle={() => setShowTimeline(!showTimeline)}
-        />
-      ))}
+      <CanvasTimeline
+        canvas={fabricCanvasRef.current}
+        visible={showTimeline}
+        onToggle={() => setShowTimeline(!showTimeline)}
+      />
+
+      {/* Timeline Toggle Button - only show when timeline is hidden */}
+      {!showTimeline && (
+        <Button
+          variant="ghost"
+          size="icon"
+          className="fixed bottom-4 right-4 h-10 w-10 rounded-full bg-gray-800/90 backdrop-blur-lg shadow-lg z-50"
+          onClick={() => setShowTimeline(true)}
+        >
+          <Clock className="h-5 w-5" />
+        </Button>
+      )}
     </div>
   );
 };

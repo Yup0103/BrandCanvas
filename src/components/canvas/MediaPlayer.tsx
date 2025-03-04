@@ -78,6 +78,7 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
     const [isMuted, setIsMuted] = useState(false);
     const [isFullscreen, setIsFullscreen] = useState(false);
     const playerRef = useRef<HTMLDivElement>(null);
+    const animationRef = useRef<number | null>(null);
 
     useEffect(() => {
         if (!mediaObject || !mediaObject.mediaElement) return;
@@ -93,6 +94,10 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
         // Add event listeners
         const handleTimeUpdate = () => {
             setCurrentTime(mediaElement.currentTime);
+            // Ensure canvas is updated when time changes
+            if (canvas && type === 'video') {
+                canvas.requestRenderAll();
+            }
         };
 
         const handleDurationChange = () => {
@@ -106,15 +111,34 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
 
         const handlePlay = () => {
             setIsPlaying(true);
+            // Start animation frame for video
+            if (type === 'video' && canvas) {
+                const updateVideoFrame = () => {
+                    if (!mediaElement.paused && !mediaElement.ended) {
+                        canvas.requestRenderAll();
+                        animationRef.current = requestAnimationFrame(updateVideoFrame);
+                    }
+                };
+                animationRef.current = requestAnimationFrame(updateVideoFrame);
+            }
         };
 
         const handlePause = () => {
             setIsPlaying(false);
+            // Cancel animation frame
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
+            }
         };
 
         const handleEnded = () => {
             setIsPlaying(false);
-            setCurrentTime(0);
+            // Cancel animation frame
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
+            }
         };
 
         mediaElement.addEventListener('timeupdate', handleTimeUpdate);
@@ -124,23 +148,45 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
         mediaElement.addEventListener('pause', handlePause);
         mediaElement.addEventListener('ended', handleEnded);
 
+        // Cleanup function
         return () => {
+            // Remove event listeners
             mediaElement.removeEventListener('timeupdate', handleTimeUpdate);
             mediaElement.removeEventListener('durationchange', handleDurationChange);
             mediaElement.removeEventListener('volumechange', handleVolumeChange);
             mediaElement.removeEventListener('play', handlePlay);
             mediaElement.removeEventListener('pause', handlePause);
             mediaElement.removeEventListener('ended', handleEnded);
+            
+            // Cancel any ongoing animation frames
+            if (animationRef.current) {
+                cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
+            }
         };
-    }, [mediaObject]);
+    }, [mediaObject, canvas, type]);
 
     const togglePlay = () => {
         if (!mediaObject || !mediaObject.mediaElement) return;
-
-        if (isPlaying) {
-            mediaObject.mediaElement.pause();
+        
+        const mediaElement = mediaObject.mediaElement;
+        
+        if (mediaElement.paused) {
+            mediaElement.play()
+                .then(() => {
+                    setIsPlaying(true);
+                })
+                .catch(err => {
+                    console.error("Error playing media:", err);
+                });
         } else {
-            mediaObject.mediaElement.play();
+            mediaElement.pause();
+            setIsPlaying(false);
+            
+            // Force a frame update when paused (especially important for video)
+            if (type === 'video' && canvas) {
+                canvas.requestRenderAll();
+            }
         }
     };
 
@@ -162,10 +208,35 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
         }
     };
 
-    const handleSeek = (newTime: number[]) => {
-        if (!mediaObject || !mediaObject.mediaElement) return;
+    // Handle seeking with the slider (which returns an array)
+    const handleSliderSeek = (newTime: number[]) => {
+        if (!mediaObject || !mediaObject.mediaElement || !newTime.length) return;
+        handleSeek(newTime[0]);
+    };
 
-        mediaObject.mediaElement.currentTime = newTime[0];
+    // Direct seek to a specific time
+    const handleSeek = (newTime: number) => {
+        if (!mediaObject || !mediaObject.mediaElement) return;
+        
+        const mediaElement = mediaObject.mediaElement;
+        mediaElement.currentTime = newTime;
+        setCurrentTime(newTime);
+        
+        // Force canvas update after seeking for video
+        if (type === 'video' && canvas) {
+            // Request immediate render 
+            canvas.requestRenderAll();
+            
+            // Request another render after a short delay to ensure frame is updated
+            setTimeout(() => {
+                canvas.requestRenderAll();
+            }, 50);
+        }
+    };
+
+    // Timeline preview click handler calls handleSeek directly
+    const handleTimelineSeek = (newTime: number) => {
+        handleSeek(newTime);
     };
 
     const handleFullscreen = () => {
@@ -201,11 +272,7 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
             <TimelinePreview
                 currentTime={currentTime}
                 duration={duration}
-                onSeek={(time) => {
-                    if (mediaObject.mediaElement) {
-                        mediaObject.mediaElement.currentTime = time;
-                    }
-                }}
+                onSeek={handleTimelineSeek}
             />
 
             {/* Progress bar */}
@@ -214,9 +281,9 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
                 <Slider
                     value={[currentTime]}
                     min={0}
-                    max={duration || 100}
-                    step={0.1}
-                    onValueChange={handleSeek}
+                    max={duration}
+                    step={0.01}
+                    onValueChange={handleSliderSeek}
                     className="flex-1"
                 />
                 <span className="text-xs">{formatTime(duration)}</span>
