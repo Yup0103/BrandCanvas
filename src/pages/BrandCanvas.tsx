@@ -979,14 +979,7 @@ const BrandCanvas: React.FC = () => {
       onClick: handleRedo,
       disabled: redoStack.length === 0,
       tooltip: 'Redo (Ctrl+Y)'
-    },
-    {
-      icon: Clock,
-      label: 'Timeline',
-      onClick: () => setShowTimeline(!showTimeline),
-      tooltip: 'Toggle Timeline',
-      className: showTimeline ? 'bg-purple-500/30' : '',
-    },
+    }
   ];
 
   // Update button states when selection changes
