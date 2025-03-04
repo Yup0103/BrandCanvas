@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { fabric } from 'fabric';
 import { Label } from '@/components/ui/label';
 import { Input } from '@/components/ui/input';
@@ -44,11 +44,51 @@ const MediaEditor: React.FC<MediaEditorProps> = ({
     const [volume, setVolume] = useState(1);
     const [isMuted, setIsMuted] = useState(false);
     const [isLooping, setIsLooping] = useState(false);
+    const [timelineVisible, setTimelineVisible] = useState(false);
+    const [scrollAreaHeight, setScrollAreaHeight] = useState('calc(100vh - 60px)');
 
     // Get the media element
     const mediaElement = type === 'video'
         ? (selectedObject as any).getElement?.() as HTMLVideoElement
         : (selectedObject as any).mediaElement as HTMLAudioElement;
+
+    // Effect to check if timeline is visible
+    useEffect(() => {
+        const checkTimelineVisibility = () => {
+            // Check for timeline element
+            const timelineElement = document.querySelector('[data-timeline="true"]');
+            const timelineVisible = timelineElement !== null && window.getComputedStyle(timelineElement).display !== 'none';
+            setTimelineVisible(timelineVisible);
+            
+            // Adjust height based on timeline visibility
+            if (timelineVisible) {
+                // Calculate timeline height (approximately 200px) or get actual height
+                const timelineHeight = timelineElement ? timelineElement.clientHeight : 200;
+                setScrollAreaHeight(`calc(100vh - 60px - ${timelineHeight}px)`);
+            } else {
+                setScrollAreaHeight('calc(100vh - 60px)');
+            }
+        };
+
+        // Initial check
+        checkTimelineVisibility();
+        
+        // Set up a mutation observer to detect changes to the DOM
+        const observer = new MutationObserver(checkTimelineVisibility);
+        observer.observe(document.body, { 
+            childList: true, 
+            subtree: true,
+            attributes: true
+        });
+        
+        // Also listen for resize events
+        window.addEventListener('resize', checkTimelineVisibility);
+        
+        return () => {
+            observer.disconnect();
+            window.removeEventListener('resize', checkTimelineVisibility);
+        };
+    }, []);
 
     if (!selectedObject || !canvas || !mediaElement) return null;
 
@@ -140,7 +180,7 @@ const MediaEditor: React.FC<MediaEditorProps> = ({
     const isLocked = selectedObject.lockMovementX && selectedObject.lockMovementY;
 
     return (
-        <ScrollArea className="h-[calc(100vh-60px)]">
+        <ScrollArea className="h-full" style={{ height: scrollAreaHeight }}>
             <div className="p-4 space-y-6">
                 <MediaPlayer
                     mediaObject={selectedObject as any}

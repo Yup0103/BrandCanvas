@@ -968,7 +968,7 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
     const timelineWidth = Math.max(duration * scale, viewportWidth);
 
     return (
-        <div className="absolute bottom-0 left-0 right-0 bg-gray-900/95 border-t border-purple-500/20 h-56 z-30 flex flex-col">
+        <div className="absolute bottom-0 left-0 right-0 bg-gray-900/95 border-t border-purple-500/20 h-56 z-30 flex flex-col" data-timeline="true">
             <div className="flex items-center justify-between px-4 py-2 border-b border-purple-500/20">
                     <div className="flex items-center gap-2">
                         <Button

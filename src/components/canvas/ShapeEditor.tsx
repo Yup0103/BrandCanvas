@@ -106,6 +106,8 @@ const ShapeEditor: React.FC<ShapeEditorProps> = ({ selectedObject, canvas, onSav
   const [selectedStop, setSelectedStop] = useState<number>(0);
   const [isDraggingStop, setIsDraggingStop] = useState(false);
   const [gradientType, setGradientType] = useState<'linear' | 'radial'>('linear');
+  const [timelineVisible, setTimelineVisible] = useState(false);
+  const [scrollAreaHeight, setScrollAreaHeight] = useState('calc(100vh - 4rem)');
 
   // Predefined colors for gradient swatches
   const predefinedColors = ['#FFFFFF', '#808080', '#A05252', '#A35B5B', '#FF00FF'];
@@ -708,13 +710,51 @@ const ShapeEditor: React.FC<ShapeEditorProps> = ({ selectedObject, canvas, onSav
     }
   };
 
+  // Effect to check if timeline is visible
+  useEffect(() => {
+    const checkTimelineVisibility = () => {
+      // Check for timeline element
+      const timelineElement = document.querySelector('[data-timeline="true"]');
+      const timelineVisible = timelineElement !== null && window.getComputedStyle(timelineElement).display !== 'none';
+      setTimelineVisible(timelineVisible);
+      
+      // Adjust height based on timeline visibility
+      if (timelineVisible) {
+        // Calculate timeline height (approximately 200px) or get actual height
+        const timelineHeight = timelineElement ? timelineElement.clientHeight : 200;
+        setScrollAreaHeight(`calc(100vh - 4rem - ${timelineHeight}px)`);
+      } else {
+        setScrollAreaHeight('calc(100vh - 4rem)');
+      }
+    };
+
+    // Initial check
+    checkTimelineVisibility();
+    
+    // Set up a mutation observer to detect changes to the DOM
+    const observer = new MutationObserver(checkTimelineVisibility);
+    observer.observe(document.body, { 
+      childList: true, 
+      subtree: true,
+      attributes: true
+    });
+    
+    // Also listen for resize events
+    window.addEventListener('resize', checkTimelineVisibility);
+    
+    return () => {
+      observer.disconnect();
+      window.removeEventListener('resize', checkTimelineVisibility);
+    };
+  }, []);
+
   if (!selectedObject || !canvas) return null;
 
   const isImage = selectedObject instanceof fabric.Image;
   const isLocked = selectedObject?.lockMovementX && selectedObject?.lockMovementY;
 
   return (
-    <ScrollArea className="h-[calc(100vh-4rem)]">
+    <ScrollArea className="h-full" style={{ height: scrollAreaHeight }}>
       <div className="space-y-4 p-4">
         <Tabs defaultValue="arrange" className="w-full">
           <TabsList className="w-full sticky top-0 bg-background z-10">
