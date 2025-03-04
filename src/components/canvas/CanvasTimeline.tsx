@@ -14,7 +14,9 @@ import {
   ZoomOut,
   MoveHorizontal,
   ArrowLeft,
-  ArrowRight
+  ArrowRight,
+  Volume2,
+  VolumeX
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Slider } from '@/components/ui/slider';
@@ -29,6 +31,16 @@ interface VideoObject extends fabric.Object {
         name: string;
         originalWidth?: number;
         originalHeight?: number;
+    };
+    id?: string;
+}
+
+interface AudioObject extends fabric.Object {
+    mediaElement?: HTMLAudioElement;
+    file?: File;
+    data?: {
+        type: string;
+        name: string;
     };
     id?: string;
 }
@@ -49,21 +61,32 @@ interface VideoTrack {
     thumbnails: string[];
 }
 
+interface AudioTrack {
+    id: string;
+    mediaObject: AudioObject;
+    name: string;
+    duration: number;
+    isVisible: boolean;
+    isLocked: boolean;
+    isMuted: boolean;
+    waveform: string[];
+}
+
 const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onToggle }) => {
     const [isPlaying, setIsPlaying] = useState(false);
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [videoTracks, setVideoTracks] = useState<VideoTrack[]>([]);
+    const [audioTracks, setAudioTracks] = useState<AudioTrack[]>([]);
     const [scale, setScale] = useState(20); // pixels per second
     const [isGeneratingThumbnails, setIsGeneratingThumbnails] = useState(false);
+    const [isGeneratingWaveform, setIsGeneratingWaveform] = useState(false);
     const [viewportWidth, setViewportWidth] = useState(0);
     const [viewportHeight, setViewportHeight] = useState(0);
     const [scrollLeft, setScrollLeft] = useState(0);
     const [isAutoScroll, setIsAutoScroll] = useState(true);
     
     const timelineRef = useRef<HTMLDivElement>(null);
-    const scrollContainerRef = useRef<HTMLDivElement>(null);
-    const tracksContainerRef = useRef<HTMLDivElement>(null);
     const animationRef = useRef<number | null>(null);
     const lastUpdateTime = useRef<number>(Date.now());
     // Use refs to avoid infinite render loops
@@ -151,9 +174,9 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
         if (!visible) return;
         
         const updateViewportSize = () => {
-            if (scrollContainerRef.current) {
-                setViewportWidth(scrollContainerRef.current.clientWidth);
-                setViewportHeight(scrollContainerRef.current.clientHeight);
+            if (scrollAreaRef.current) {
+                setViewportWidth(scrollAreaRef.current.clientWidth);
+                setViewportHeight(scrollAreaRef.current.clientHeight);
             }
         };
         
@@ -168,20 +191,28 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
         };
     }, [visible]);
 
-    // Find all video objects on the canvas and update video tracks
+    // Find all media objects on the canvas and update tracks
     useEffect(() => {
         if (!canvas || !visible) return;
 
-        const updateVideoObjects = () => {
+        const updateMediaObjects = () => {
         if (!canvas) return;
 
             const objects = canvas.getObjects();
+            
+            // Find video objects
             const videoObjects = objects.filter(obj => {
-                const videoObj = obj as VideoObject;
-                return videoObj.mediaElement && videoObj.mediaElement instanceof HTMLVideoElement;
+                const mediaObj = obj as VideoObject;
+                return mediaObj.mediaElement && mediaObj.mediaElement instanceof HTMLVideoElement;
             }) as VideoObject[];
             
-            // Update existing tracks and add new ones
+            // Find audio objects
+            const audioObjects = objects.filter(obj => {
+                const mediaObj = obj as any;
+                return mediaObj.mediaElement && mediaObj.mediaElement instanceof HTMLAudioElement;
+            }) as AudioObject[];
+            
+            // Update existing video tracks and add new ones
             setVideoTracks(prevTracks => {
                 const newTracks: VideoTrack[] = [];
                 let maxDuration = 0;
@@ -208,7 +239,7 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                         // Create a new track
                         const trackName = videoObj.data?.name || 'Unnamed Video';
                         newTracks.push({
-                            id: `track-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+                            id: `video-track-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
                             mediaObject: videoObj,
                             name: trackName,
                             duration: videoDuration,
@@ -221,18 +252,66 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                     maxDuration = Math.max(maxDuration, videoDuration);
                 });
                 
-                // Update duration based on max video length
+                return newTracks;
+            });
+            
+            // Update existing audio tracks and add new ones
+            setAudioTracks(prevTracks => {
+                const newTracks: AudioTrack[] = [];
+            let maxDuration = 0;
+                
+                audioObjects.forEach(audioObj => {
+                    if (!audioObj.mediaElement) return;
+                    
+                    const audioElement = audioObj.mediaElement;
+                    // Use object ID instead of object reference for more reliable tracking
+                    const existingTrack = prevTracks.find(t => 
+                        // Check if objects have same ID or if they are the same reference
+                        (audioObj.id && t.mediaObject.id === audioObj.id) || t.mediaObject === audioObj
+                    );
+                    const audioDuration = isNaN(audioElement.duration) ? 0 : audioElement.duration;
+                    
+                    if (existingTrack) {
+                        // Update existing track
+                        newTracks.push({
+                            ...existingTrack,
+                            duration: audioDuration,
+                            mediaObject: audioObj // Update with latest reference
+                        });
+                    } else {
+                        // Create a new track
+                        const trackName = audioObj.data?.name || 'Unnamed Audio';
+                        newTracks.push({
+                            id: `audio-track-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`,
+                            mediaObject: audioObj,
+                            name: trackName,
+                            duration: audioDuration,
+                            isVisible: true,
+                            isLocked: false,
+                            isMuted: false,
+                            waveform: []
+                        });
+                    }
+                    
+                    maxDuration = Math.max(maxDuration, audioDuration);
+                });
+                
+                return newTracks;
+            });
+            
+            // Update total duration based on the longest media
+            const allTracks = [...videoTracks, ...audioTracks];
+            if (allTracks.length > 0) {
+                const maxDuration = Math.max(...allTracks.map(track => track.duration));
                 if (maxDuration > 0) {
                     setDuration(maxDuration);
                 }
-                
-                // Keep only tracks that have corresponding objects on canvas
-                return newTracks;
-            });
+            }
         };
         
-        // Generate thumbnails for tracks that don't have them
-        const generateThumbnails = async () => {
+        // Generate thumbnails and waveforms for tracks that don't have them
+        const generateMediaVisualization = async () => {
+            // Generate thumbnails for video tracks
             setVideoTracks(prevTracks => {
                 return prevTracks.map(track => {
                     if (track.thumbnails.length === 0 && track.duration > 0) {
@@ -244,29 +323,47 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                     return track;
                 });
             });
+            
+            // Generate waveforms for audio tracks
+            setAudioTracks(prevTracks => {
+                return prevTracks.map(track => {
+                    if (track.waveform.length === 0 && track.duration > 0) {
+                        // Schedule waveform generation
+                        setTimeout(() => {
+                            generateAudioWaveform(track);
+                        }, 500);
+                    }
+                    return track;
+                });
+            });
         };
         
         // Initial update
-        updateVideoObjects();
-        generateThumbnails();
+        updateMediaObjects();
+        generateMediaVisualization();
         
-        // Listen for new videos added to canvas
+        // Listen for objects added to canvas
         const handleObjectAdded = (e: any) => {
-            const addedObject = e.target as VideoObject;
-            if (addedObject.mediaElement instanceof HTMLVideoElement) {
-                console.log('Video added to canvas:', addedObject);
-                updateVideoObjects();
-                // Delay thumbnail generation slightly to ensure video is ready
+            const addedObject = e.target as any;
+            if (addedObject.mediaElement instanceof HTMLVideoElement || 
+                addedObject.mediaElement instanceof HTMLAudioElement) {
+                console.log('Media added to canvas:', addedObject);
+                updateMediaObjects();
+                // Delay media visualization generation slightly to ensure media is ready
                 setTimeout(() => {
-                    generateThumbnails();
+                    generateMediaVisualization();
                 }, 800);
             }
         };
         
         const handleObjectRemoved = (e: any) => {
-            const removedObject = e.target as VideoObject;
+            const removedObject = e.target as any;
             if (removedObject.mediaElement instanceof HTMLVideoElement) {
                 setVideoTracks(prevTracks => 
+                    prevTracks.filter(track => track.mediaObject !== removedObject)
+                );
+            } else if (removedObject.mediaElement instanceof HTMLAudioElement) {
+                setAudioTracks(prevTracks => 
                     prevTracks.filter(track => track.mediaObject !== removedObject)
                 );
             }
@@ -279,7 +376,7 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
             canvas.off('object:added', handleObjectAdded);
             canvas.off('object:removed', handleObjectRemoved);
         };
-    }, [canvas, visible]);
+    }, [canvas, visible, videoTracks, audioTracks]);
 
     // Generate thumbnails for a video track
     const generateVideoThumbnails = async (track: VideoTrack) => {
@@ -369,27 +466,194 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
         }
     };
 
+    // Generate waveform for an audio track
+    const generateAudioWaveform = async (track: AudioTrack) => {
+        if (!track.mediaObject.mediaElement) return;
+        
+        // Prevent multiple simultaneous waveform generations
+        if (isGeneratingWaveform) {
+            setTimeout(() => generateAudioWaveform(track), 1000);
+            return;
+        }
+        
+        setIsGeneratingWaveform(true);
+        
+        try {
+            const audio = track.mediaObject.mediaElement;
+            const audioFile = track.mediaObject.file;
+            
+            if (!audioFile) {
+                console.warn('No audio file found for waveform generation');
+                createStylizedWaveform(track);
+                return;
+            }
+            
+            // Create an AudioContext for analyzing the audio
+            const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+            
+            // Load the audio file as an ArrayBuffer
+            const arrayBuffer = await audioFile.arrayBuffer();
+            
+            // Decode the audio data
+            const audioBuffer = await audioContext.decodeAudioData(arrayBuffer);
+            
+            // Get the raw audio data (we'll use the first channel for mono waveform)
+            const channelData = audioBuffer.getChannelData(0);
+            
+            // For better looking waveforms, use more samples
+            const numSamples = Math.max(150, Math.ceil(track.duration * 15)); // More samples for smoother look
+            const samplesPerSegment = Math.floor(channelData.length / numSamples);
+            
+            const waveform: string[] = [];
+            
+            // Process audio data into beautiful waveform segments
+            for (let i = 0; i < numSamples; i++) {
+                const startSample = i * samplesPerSegment;
+                const endSample = Math.min(startSample + samplesPerSegment, channelData.length);
+                
+                // For visual appeal, we'll still use actual audio data but simplify the calculation
+                let sum = 0;
+                for (let j = startSample; j < endSample; j++) {
+                    sum += Math.abs(channelData[j]);
+                }
+                
+                const amplitude = sum / (endSample - startSample);
+                
+                // Add visual smoothing with neighboring segments
+                const smoothingFactor = 0.3;
+                const normalizedPos = i / numSamples;
+                const smoothedHeight = amplitude + (Math.sin(normalizedPos * Math.PI * 8) * smoothingFactor);
+                
+                // Scale to reasonable height (between 4 and 36 pixels)
+                const minHeight = 4;
+                const rawHeight = smoothedHeight * 60; // Amplify for visibility
+                const height = minHeight + Math.min(36 - minHeight, rawHeight);
+                
+                // Create beautiful colors with gradients
+                // Use a consistent purple palette with slight variations for visual interest
+                const baseHue = 270; // Purple hue
+                const hueVariation = Math.sin(normalizedPos * Math.PI * 3) * 10;
+                const hue = baseHue + hueVariation;
+                const saturation = 80;
+                const lightness = 60;
+                
+                // Create a simple, elegant bar with rounded corners
+                const svg = `<svg width="4" height="40" viewBox="0 0 4 40" xmlns="http://www.w3.org/2000/svg">
+                    <rect 
+                        x="0"
+                        y="${(40-height)/2}"
+                        width="4"
+                        height="${height}"
+                        rx="2"
+                        fill="hsl(${hue}, ${saturation}%, ${lightness}%)"
+                    />
+                </svg>`;
+                
+                waveform.push(`data:image/svg+xml;base64,${btoa(svg)}`);
+            }
+            
+            // Close the audio context when we're done
+            await audioContext.close();
+            
+            // Update track with waveform
+            setAudioTracks(prevTracks => 
+                prevTracks.map(t => 
+                    t.id === track.id ? { ...t, waveform } : t
+                )
+            );
+            
+        } catch (error) {
+            console.error('Error generating waveform:', error);
+            createStylizedWaveform(track);
+        } finally {
+            setIsGeneratingWaveform(false);
+        }
+    };
+    
+    // Generate an aesthetically pleasing waveform without audio analysis
+    const createStylizedWaveform = (track: AudioTrack) => {
+        const numSamples = Math.max(150, Math.ceil(track.duration * 15));
+        const waveform: string[] = [];
+        
+        for (let i = 0; i < numSamples; i++) {
+            const normalizedPos = i / numSamples;
+            
+            // Create a beautiful wave pattern using multiple sine waves
+            const wave1 = Math.sin(normalizedPos * Math.PI * 8) * 0.5;
+            const wave2 = Math.sin(normalizedPos * Math.PI * 16) * 0.25;
+            const wave3 = Math.sin(normalizedPos * Math.PI * 32) * 0.125;
+            
+            // Combine waves for a natural, musical look
+            const combinedWave = 0.5 + (wave1 + wave2 + wave3) * 0.4;
+            
+            // Scale to a visually pleasing height
+            const height = 4 + (combinedWave * 32);
+            
+            // Create color variations
+            const hue = 270 + (Math.sin(normalizedPos * Math.PI * 3) * 10);
+            const saturation = 80;
+            const lightness = 60;
+            
+            // Generate SVG
+            const svg = `<svg width="4" height="40" viewBox="0 0 4 40" xmlns="http://www.w3.org/2000/svg">
+                <rect 
+                    x="0"
+                    y="${(40-height)/2}"
+                    width="4"
+                    height="${height}"
+                    rx="2"
+                    fill="hsl(${hue}, ${saturation}%, ${lightness}%)"
+                />
+            </svg>`;
+            
+            waveform.push(`data:image/svg+xml;base64,${btoa(svg)}`);
+        }
+        
+        // Update track with stylized waveform
+        setAudioTracks(prevTracks => 
+            prevTracks.map(t => 
+                t.id === track.id ? { ...t, waveform } : t
+            )
+        );
+    };
+
     // Update current time during playback
     useEffect(() => {
-        if (videoTracks.length === 0 || !isPlaying) return;
+        // Changed this condition to allow playback updates with only audio tracks
+        if ((!videoTracks.length && !audioTracks.length) || !isPlaying) return;
 
         const updatePlayback = () => {
             const now = Date.now();
             const deltaTime = (now - lastUpdateTime.current) / 1000;
             lastUpdateTime.current = now;
 
-            // Update current time
+            // Update current time based on all media elements
             let maxCurrentTime = 0;
+            let hasActiveMedia = false;
+            
+            // Check video tracks
             for (const track of videoTracks) {
                 if (track.mediaObject.mediaElement?.currentTime) {
                     maxCurrentTime = Math.max(maxCurrentTime, track.mediaObject.mediaElement.currentTime);
+                    hasActiveMedia = true;
+                }
+            }
+            
+            // Check audio tracks
+            for (const track of audioTracks) {
+                if (track.mediaObject.mediaElement?.currentTime) {
+                    maxCurrentTime = Math.max(maxCurrentTime, track.mediaObject.mediaElement.currentTime);
+                    hasActiveMedia = true;
                 }
             }
 
-            setCurrentTime(maxCurrentTime);
+            // Only update if we have active media
+            if (hasActiveMedia) {
+                setCurrentTime(maxCurrentTime);
+            }
 
             // Auto-scroll timeline if enabled
-            if (isAutoScroll && scrollContainerRef.current) {
+            if (isAutoScroll && scrollAreaRef.current) {
                 const timePosition = maxCurrentTime * scale;
                 // Only scroll if playhead is getting close to the edge of the viewport
                 const bufferZone = viewportWidth * 0.2; // 20% of viewport width
@@ -400,35 +664,59 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                     timePosition < currentScrollLeft + bufferZone) {
                     // Center the playhead
                     const newScrollLeft = timePosition - (viewportWidth / 2);
-                    scrollContainerRef.current.scrollLeft = newScrollLeft;
-                    scrollPositionRef.current = newScrollLeft;
+                    
+                    // Access the viewport directly for scrolling
+                    const scrollContent = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement;
+                    if (scrollContent) {
+                        scrollContent.scrollLeft = newScrollLeft;
+                        scrollPositionRef.current = newScrollLeft;
+                        setScrollLeft(newScrollLeft);
+                    }
                 }
             }
 
+            // Check if any media has reached the end
             if (maxCurrentTime >= duration) {
                 setIsPlaying(false);
+                
+                // Pause all media
+                videoTracks.forEach(track => {
+                    if (track.mediaObject.mediaElement) {
+                        track.mediaObject.mediaElement.pause();
+                    }
+                });
+                
+                audioTracks.forEach(track => {
+                    if (track.mediaObject.mediaElement) {
+                        track.mediaObject.mediaElement.pause();
+                    }
+                });
             } else if (isPlaying) {
+                // Continue animation loop
                 animationRef.current = requestAnimationFrame(updatePlayback);
             }
         };
 
+        // Initialize the animation loop
         lastUpdateTime.current = Date.now();
         animationRef.current = requestAnimationFrame(updatePlayback);
 
         return () => {
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current);
+                animationRef.current = null;
             }
         };
-    }, [videoTracks, isPlaying, duration, scale, viewportWidth, isAutoScroll]);
+    }, [videoTracks, audioTracks, isPlaying, duration, scale, viewportWidth, isAutoScroll]);
 
     // Track scroll position
     useEffect(() => {
-        if (!scrollContainerRef.current || !visible) return;
+        if (!scrollAreaRef.current || !visible) return;
         
         const handleScroll = () => {
-            if (scrollContainerRef.current) {
-                const newScrollLeft = scrollContainerRef.current.scrollLeft;
+            const scrollContent = scrollAreaRef.current?.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement;
+            if (scrollContent) {
+                const newScrollLeft = scrollContent.scrollLeft;
                 scrollPositionRef.current = newScrollLeft;
                 // Only update state when needed to avoid render loops
                 if (Math.abs(scrollLeft - newScrollLeft) > 5) {
@@ -437,10 +725,13 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
             }
         };
         
-        scrollContainerRef.current.addEventListener('scroll', handleScroll);
-        return () => {
-            scrollContainerRef.current?.removeEventListener('scroll', handleScroll);
-        };
+        const scrollContent = scrollAreaRef.current.querySelector('[data-radix-scroll-area-viewport]') as HTMLElement;
+        if (scrollContent) {
+            scrollContent.addEventListener('scroll', handleScroll);
+            return () => {
+                scrollContent.removeEventListener('scroll', handleScroll);
+            };
+        }
     }, [visible, scrollLeft]);
 
     // Toggle playback
@@ -448,7 +739,19 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
         const newIsPlaying = !isPlaying;
         setIsPlaying(newIsPlaying);
         
+        // Handle video playback
         videoTracks.forEach(track => {
+            if (track.mediaObject.mediaElement) {
+                if (newIsPlaying) {
+                    track.mediaObject.mediaElement.play();
+                } else {
+                    track.mediaObject.mediaElement.pause();
+                }
+            }
+        });
+        
+        // Handle audio playback
+        audioTracks.forEach(track => {
             if (track.mediaObject.mediaElement) {
                 if (newIsPlaying) {
                     track.mediaObject.mediaElement.play();
@@ -467,7 +770,16 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
 
         setCurrentTime(0);
         
+        // Reset videos
         videoTracks.forEach(track => {
+            if (track.mediaObject.mediaElement) {
+                track.mediaObject.mediaElement.pause();
+                track.mediaObject.mediaElement.currentTime = 0;
+            }
+        });
+        
+        // Reset audio
+        audioTracks.forEach(track => {
             if (track.mediaObject.mediaElement) {
                 track.mediaObject.mediaElement.pause();
                 track.mediaObject.mediaElement.currentTime = 0;
@@ -475,16 +787,21 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
         });
     };
 
-    // Seek to specific time
+    // Seek to time
     const seekToTime = (time: number) => {
-        // Clamp the time to valid range
-        const clampedTime = Math.max(0, Math.min(time, duration));
+        setCurrentTime(time);
         
-        setCurrentTime(clampedTime);
-        
+        // Seek videos
         videoTracks.forEach(track => {
             if (track.mediaObject.mediaElement) {
-                track.mediaObject.mediaElement.currentTime = clampedTime;
+                track.mediaObject.mediaElement.currentTime = time;
+            }
+        });
+        
+        // Seek audio
+        audioTracks.forEach(track => {
+            if (track.mediaObject.mediaElement) {
+                track.mediaObject.mediaElement.currentTime = time;
             }
         });
     };
@@ -514,15 +831,15 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
     
     // Zoom to fit all content
     const zoomToFit = useCallback(() => {
-        if (!scrollContainerRef.current || duration <= 0) return;
+        if (!scrollAreaRef.current || duration <= 0) return;
         
-        const availableWidth = scrollContainerRef.current.clientWidth - 40; // 40px for padding
+        const availableWidth = scrollAreaRef.current.clientWidth - 40; // 40px for padding
         const newScale = Math.max(5, availableWidth / duration);
         setScale(newScale);
         
         // Reset scroll position
-        if (scrollContainerRef.current) {
-            scrollContainerRef.current.scrollLeft = 0;
+        if (scrollAreaRef.current) {
+            scrollAreaRef.current.scrollLeft = 0;
             scrollPositionRef.current = 0;
             setScrollLeft(0);
         }
@@ -530,73 +847,124 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
     
     // Navigate left/right
     const navigateLeft = useCallback(() => {
-        if (!scrollContainerRef.current) return;
+        if (!scrollAreaRef.current) return;
         const currentScrollLeft = scrollPositionRef.current;
         const newScrollLeft = Math.max(0, currentScrollLeft - viewportWidth / 2);
-        scrollContainerRef.current.scrollLeft = newScrollLeft;
+        scrollAreaRef.current.scrollLeft = newScrollLeft;
         scrollPositionRef.current = newScrollLeft;
         setScrollLeft(newScrollLeft);
     }, [viewportWidth]);
     
     const navigateRight = useCallback(() => {
-        if (!scrollContainerRef.current) return;
+        if (!scrollAreaRef.current) return;
         const currentScrollLeft = scrollPositionRef.current;
         const maxScroll = Math.max(0, duration * scale - viewportWidth);
         const newScrollLeft = Math.min(maxScroll, currentScrollLeft + viewportWidth / 2);
-        scrollContainerRef.current.scrollLeft = newScrollLeft;
+        scrollAreaRef.current.scrollLeft = newScrollLeft;
         scrollPositionRef.current = newScrollLeft;
         setScrollLeft(newScrollLeft);
     }, [viewportWidth, duration, scale]);
 
-    // Toggle track visibility
-    const toggleTrackVisibility = useCallback((trackId: string) => {
-        setVideoTracks(prevTracks => 
-            prevTracks.map(track => {
+    // Toggle audio track mute
+    const toggleAudioMute = (trackId: string) => {
+        setAudioTracks(prevTracks => {
+            return prevTracks.map(track => {
                 if (track.id === trackId) {
-                    // Toggle visibility
-                    const newIsVisible = !track.isVisible;
+                    const newMuted = !track.isMuted;
                     
-                    // Update fabric object opacity
-                    if (track.mediaObject) {
-                        track.mediaObject.set('opacity', newIsVisible ? 1 : 0);
-                        canvas?.renderAll();
+                    // Update the actual audio element
+                    if (track.mediaObject.mediaElement) {
+                        track.mediaObject.mediaElement.muted = newMuted;
                     }
                     
-                    return { ...track, isVisible: newIsVisible };
+                    return { ...track, isMuted: newMuted };
                 }
                 return track;
-            })
-        );
-    }, [canvas]);
+            });
+        });
+    };
+
+    // Toggle track visibility
+    const toggleTrackVisibility = (trackId: string) => {
+        // Check if it's a video track
+        const videoTrack = videoTracks.find(t => t.id === trackId);
+        if (videoTrack) {
+            setVideoTracks(prevTracks => {
+                return prevTracks.map(track => {
+                    if (track.id === trackId) {
+                        const newIsVisible = !track.isVisible;
+                        if (track.mediaObject && canvas) {
+                            track.mediaObject.visible = newIsVisible;
+                            canvas.renderAll();
+                        }
+                        return { ...track, isVisible: newIsVisible };
+                    }
+                    return track;
+                });
+            });
+            return;
+        }
+        
+        // Check if it's an audio track
+        const audioTrack = audioTracks.find(t => t.id === trackId);
+        if (audioTrack) {
+            setAudioTracks(prevTracks => {
+                return prevTracks.map(track => {
+                    if (track.id === trackId) {
+                        const newIsVisible = !track.isVisible;
+                        if (track.mediaObject && canvas) {
+                            track.mediaObject.visible = newIsVisible;
+                            canvas.renderAll();
+                        }
+                        return { ...track, isVisible: newIsVisible };
+                    }
+                    return track;
+                });
+            });
+        }
+    };
 
     // Toggle track lock
-    const toggleTrackLock = useCallback((trackId: string) => {
-        setVideoTracks(prevTracks => 
-            prevTracks.map(track => {
-                if (track.id === trackId) {
-                    // Toggle lock
-                    const newIsLocked = !track.isLocked;
-                    
-                    // Update fabric object selectable/editable status
-                    if (track.mediaObject) {
-                        track.mediaObject.set({
-                            selectable: !newIsLocked,
-                            evented: !newIsLocked,
-                            lockMovementX: newIsLocked,
-                            lockMovementY: newIsLocked,
-                            lockRotation: newIsLocked,
-                            lockScalingX: newIsLocked,
-                            lockScalingY: newIsLocked
-                        });
-                        canvas?.renderAll();
+    const toggleTrackLock = (trackId: string) => {
+        // Check if it's a video track
+        const videoTrack = videoTracks.find(t => t.id === trackId);
+        if (videoTrack) {
+            setVideoTracks(prevTracks => {
+                return prevTracks.map(track => {
+                    if (track.id === trackId) {
+                        const newIsLocked = !track.isLocked;
+                        if (track.mediaObject && canvas) {
+                            track.mediaObject.selectable = !newIsLocked;
+                            track.mediaObject.evented = !newIsLocked;
+                            canvas.renderAll();
+                        }
+                        return { ...track, isLocked: newIsLocked };
                     }
-                    
-                    return { ...track, isLocked: newIsLocked };
-                }
-                return track;
-            })
-        );
-    }, [canvas]);
+                    return track;
+                });
+            });
+            return;
+        }
+        
+        // Check if it's an audio track
+        const audioTrack = audioTracks.find(t => t.id === trackId);
+        if (audioTrack) {
+            setAudioTracks(prevTracks => {
+                return prevTracks.map(track => {
+                    if (track.id === trackId) {
+                        const newIsLocked = !track.isLocked;
+                        if (track.mediaObject && canvas) {
+                            track.mediaObject.selectable = !newIsLocked;
+                            track.mediaObject.evented = !newIsLocked;
+                            canvas.renderAll();
+                        }
+                        return { ...track, isLocked: newIsLocked };
+                    }
+                    return track;
+                });
+            });
+        }
+    };
 
     // Format time as MM:SS
     const formatTime = useCallback((seconds: number): string => {
@@ -612,25 +980,25 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
     return (
         <div className="absolute bottom-0 left-0 right-0 bg-gray-900/95 border-t border-purple-500/20 h-56 z-30 flex flex-col">
             <div className="flex items-center justify-between px-4 py-2 border-b border-purple-500/20">
-                <div className="flex items-center gap-2">
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={togglePlayback}
-                        disabled={videoTracks.length === 0}
-                    >
-                        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                    </Button>
-                    <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={resetPlayback}
-                        disabled={videoTracks.length === 0}
-                    >
+                    <div className="flex items-center gap-2">
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={togglePlayback}
+                            disabled={videoTracks.length === 0 && audioTracks.length === 0}
+                        >
+                            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                        </Button>
+                        <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={resetPlayback}
+                            disabled={videoTracks.length === 0 && audioTracks.length === 0}
+                        >
                         <SkipBack className="h-4 w-4" />
-                    </Button>
+                        </Button>
                     <div className="text-sm font-mono">
-                        {formatTime(currentTime)} / {formatTime(duration)}
+                            {formatTime(currentTime)} / {formatTime(duration)}
                     </div>
                 </div>
                 
@@ -675,8 +1043,8 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                     <TooltipProvider>
                         <Tooltip>
                             <TooltipTrigger asChild>
-                                <Button
-                                    variant="ghost"
+                    <Button
+                        variant="ghost"
                                     size="icon"
                                     onClick={zoomToFit}
                                 >
@@ -694,12 +1062,12 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                             <TooltipTrigger asChild>
                                 <Button
                                     variant={isAutoScroll ? "default" : "ghost"}
-                                    size="sm"
+                        size="sm"
                                     onClick={() => setIsAutoScroll(!isAutoScroll)}
                                     className="text-xs"
-                                >
+                    >
                                     Auto-Scroll
-                                </Button>
+                    </Button>
                             </TooltipTrigger>
                             <TooltipContent>
                                 <p>{isAutoScroll ? 'Disable' : 'Enable'} auto-scrolling during playback</p>
@@ -736,96 +1104,201 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                         </div>
                     </div>
                     
-                    {/* Video tracks area */}
+                    {/* Media tracks area */}
                     <div 
                         className="flex-1 relative"
                         style={{ width: `${timelineWidth}px`, minHeight: "100%" }}
                     >
-                        {/* Track content area */}
-                        <div className="relative">
-                            {videoTracks.map(track => (
-                                <div key={track.id} className="flex h-20 border-b border-purple-500/20">
-                                    {/* Track info fixed sidebar */}
-                                    <div className="w-20 flex-shrink-0 p-2 bg-gray-800 flex flex-col justify-between sticky left-0 z-10">
-                                        <div className="truncate text-xs" title={track.name}>
-                                            {track.name}
-                                        </div>
-                                        <div className="flex gap-1">
-                                            <TooltipProvider>
-                                                <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-6 w-6"
-                                                            onClick={() => toggleTrackVisibility(track.id)}
-                                                        >
-                                                            {track.isVisible ? (
-                                                                <Eye className="h-3 w-3" />
-                                                            ) : (
-                                                                <EyeOff className="h-3 w-3" />
-                                                            )}
-                                                        </Button>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent>
-                                                        <p>{track.isVisible ? 'Hide' : 'Show'} track</p>
-                                                    </TooltipContent>
-                                                </Tooltip>
-                                            </TooltipProvider>
-                                            
-                                            <TooltipProvider>
-                                                <Tooltip>
-                                                    <TooltipTrigger asChild>
-                                                        <Button
-                                                            variant="ghost"
-                                                            size="icon"
-                                                            className="h-6 w-6"
-                                                            onClick={() => toggleTrackLock(track.id)}
-                                                        >
-                                                            {track.isLocked ? (
-                                                                <Lock className="h-3 w-3" />
-                                                            ) : (
-                                                                <Unlock className="h-3 w-3" />
-                                                            )}
-                                                        </Button>
-                                                    </TooltipTrigger>
-                                                    <TooltipContent>
-                                                        <p>{track.isLocked ? 'Unlock' : 'Lock'} track</p>
-                                                    </TooltipContent>
-                                                </Tooltip>
-                                            </TooltipProvider>
-                                        </div>
+                        {/* Video tracks */}
+                        {videoTracks.map(track => (
+                            <div key={track.id} className="flex h-20 border-b border-purple-500/20">
+                                {/* Track info fixed sidebar */}
+                                <div className="w-20 flex-shrink-0 p-2 bg-gray-800 flex flex-col justify-between sticky left-0 z-10">
+                                    <div className="truncate text-xs" title={track.name}>
+                                        {track.name}
                                     </div>
-                                    
-                                    {/* Track timeline */}
-                                    <div className="flex-1 relative h-full">
-                                        {/* Thumbnails */}
-                                        <div className="absolute inset-0 flex items-center p-1">
-                                            {track.thumbnails.map((thumbnail, i) => {
-                                                const position = (i / (track.thumbnails.length - 1 || 1)) * track.duration * scale;
-                                                const thumbWidth = Math.max(30, scale * 0.5); // Dynamic thumbnail width based on scale
-                                                return (
-                                                    <div 
-                                                        key={i}
-                                                        className="absolute top-1 bottom-1 overflow-hidden rounded-sm border border-purple-500/30"
-                                                        style={{ 
-                                                            left: `${position - (thumbWidth/2)}px`,
-                                                            width: `${thumbWidth}px` 
-                                                        }}
+                                    <div className="flex gap-1">
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6"
+                                                        onClick={() => toggleTrackVisibility(track.id)}
                                                     >
-                                                        <img 
-                                                            src={thumbnail} 
-                                                            alt={`Frame ${i}`}
-                                                            className="w-full h-full object-cover"
-                                                        />
-                                                    </div>
-                                                );
-                                            })}
+                                                        {track.isVisible ? (
+                                                            <Eye className="h-3 w-3" />
+                                                        ) : (
+                                                            <EyeOff className="h-3 w-3" />
+                                                        )}
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>{track.isVisible ? 'Hide' : 'Show'} track</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                        
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6"
+                                                        onClick={() => toggleTrackLock(track.id)}
+                                                    >
+                                                        {track.isLocked ? (
+                                                            <Lock className="h-3 w-3" />
+                                                        ) : (
+                                                            <Unlock className="h-3 w-3" />
+                                                        )}
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>{track.isLocked ? 'Unlock' : 'Lock'} track</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                    </div>
+                                </div>
+                                
+                                {/* Track timeline */}
+                                <div className="flex-1 relative h-full">
+                                    {/* Thumbnails */}
+                                    <div className="absolute inset-0 flex items-center p-1">
+                                        {track.thumbnails.map((thumbnail, i) => {
+                                            const position = (i / (track.thumbnails.length - 1 || 1)) * track.duration * scale;
+                                            const thumbWidth = Math.max(30, scale * 0.5); // Dynamic thumbnail width based on scale
+                                            return (
+                                                <div 
+                                                    key={i}
+                                                    className="absolute top-1 bottom-1 overflow-hidden rounded-sm border border-purple-500/30"
+                                                    style={{ 
+                                                        left: `${position - (thumbWidth/2)}px`,
+                                                        width: `${thumbWidth}px` 
+                                                    }}
+                                                >
+                                                    <img 
+                                                        src={thumbnail} 
+                                                        alt={`Frame ${i}`}
+                                                        className="w-full h-full object-cover"
+                                                    />
+                                                </div>
+                                            );
+                                        })}
+                                    </div>
+                                </div>
+                            </div>
+                        ))}
+                        
+                        {/* Audio tracks */}
+                        {audioTracks.map(track => (
+                            <div key={track.id} className="flex h-16 border-b border-purple-500/20">
+                                {/* Track info fixed sidebar */}
+                                <div className="w-20 flex-shrink-0 p-2 bg-gray-800 flex flex-col justify-between sticky left-0 z-10">
+                                    <div className="truncate text-xs" title={track.name}>
+                                        {track.name}
+                                    </div>
+                                    <div className="flex gap-1">
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6"
+                                                        onClick={() => toggleAudioMute(track.id)}
+                                                    >
+                                                        {track.isMuted ? (
+                                                            <VolumeX className="h-3 w-3" />
+                                                        ) : (
+                                                            <Volume2 className="h-3 w-3" />
+                                                        )}
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>{track.isMuted ? 'Unmute' : 'Mute'} track</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                        
+                                        <TooltipProvider>
+                                            <Tooltip>
+                                                <TooltipTrigger asChild>
+                                                    <Button
+                                                        variant="ghost"
+                                                        size="icon"
+                                                        className="h-6 w-6"
+                                                        onClick={() => toggleTrackLock(track.id)}
+                                                    >
+                                                        {track.isLocked ? (
+                                                            <Lock className="h-3 w-3" />
+                                                        ) : (
+                                                            <Unlock className="h-3 w-3" />
+                                                        )}
+                                                    </Button>
+                                                </TooltipTrigger>
+                                                <TooltipContent>
+                                                    <p>{track.isLocked ? 'Unlock' : 'Lock'} track</p>
+                                                </TooltipContent>
+                                            </Tooltip>
+                                        </TooltipProvider>
+                                    </div>
+                                </div>
+
+                                {/* Track timeline */}
+                                <div className="flex-1 relative h-full">
+                                    {/* Waveform visualization */}
+                                    <div className="absolute inset-0 flex items-center">
+                                        {/* Beautiful background for waveform */}
+                                        <div 
+                                            className="absolute h-12 inset-x-0 bg-gradient-to-r from-purple-900/20 via-purple-800/10 to-purple-900/20 rounded-md border border-purple-500/30"
+                                            style={{ opacity: track.isMuted ? '0.4' : '1' }}
+                                        />
+                                        
+                                        {/* Render waveform segments */}
+                                        {track.waveform.map((segment, i) => {
+                                            const position = (i / (track.waveform.length - 1 || 1)) * track.duration * scale;
+                                            const gap = 1; // Small gap between segments for a cleaner look
+                                            return (
+                                                <div 
+                                                    key={i}
+                                                    className="absolute h-12 flex items-center justify-center"
+                                                    style={{ 
+                                                        left: `${position}px`,
+                                                        opacity: track.isMuted ? '0.3' : '1'
+                                                    }}
+                                                >
+                                                    <img 
+                                                        src={segment} 
+                                                        alt=""
+                                                        className="h-full"
+                                                    />
+                                                </div>
+                                            );
+                                        })}
+                                        
+                                        {/* Add stylish track info overlay */}
+                                        <div className="absolute left-3 top-1 text-xs text-white/80 font-medium pointer-events-none">
+                                            <span className="bg-purple-600/40 px-1.5 py-0.5 rounded-sm backdrop-blur-sm">
+                                                {track.name}
+                                            </span>
+                                        </div>
+                                        
+                                        {/* Duration indicator */}
+                                        <div 
+                                            className="absolute right-3 top-1 text-xs text-white/70 font-medium pointer-events-none"
+                                        >
+                                            <span className="bg-purple-700/30 px-1.5 py-0.5 rounded-sm backdrop-blur-sm">
+                                                {track.duration.toFixed(1)}s
+                                            </span>
                                         </div>
                                     </div>
                                 </div>
-                            ))}
-                        </div>
+                            </div>
+                        ))}
                     </div>
                     
                     {/* Playhead/timeline interaction area */}
