@@ -66,7 +66,6 @@ import { Separator } from '@/components/ui/separator';
 import { LayerMenu } from '@/components/canvas/LayerMenu';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import CanvasTimeline from '@/components/canvas/CanvasTimeline';
-import { toast } from '@/components/ui/use-toast';
 
 const BrandCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -765,53 +764,61 @@ const BrandCanvas: React.FC = () => {
 
     // Wait for the audio to be loaded
     audioEl.onloadedmetadata = () => {
-      // Instead of creating a visible rectangle and text, create an invisible object
-      // that will only be used for timeline tracking
-      const audioObj = new fabric.Rect({
-        width: 0,
-        height: 0,
+      // Create a simple rectangle to represent audio
+      const rect = new fabric.Rect({
+        left: canvasSize.width / 2,
+        top: canvasSize.height / 2,
+        width: 180,
+        height: 60,
+        fill: 'purple',
+        opacity: 0.8,
+        rx: 10,
+        ry: 10,
+        originX: 'center',
+        originY: 'center',
+      });
+
+      // Add text label with filename
+      const label = new fabric.Text(file.name.length > 20 ? file.name.substring(0, 17) + '...' : file.name, {
+        fontSize: 14,
+        fill: 'white',
+        originX: 'center',
+        originY: 'center',
         left: 0,
         top: 0,
-        fill: 'transparent',
-        opacity: 0,
-        visible: false,
-        selectable: false,
-        evented: false
+      });
+
+      // Create a group with the rectangle and label
+      const group = new fabric.Group([rect, label], {
+        left: canvasSize.width / 2,
+        top: canvasSize.height / 2,
+        originX: 'center',
+        originY: 'center',
       });
 
       // Store audio element and file info
-      (audioObj as any).mediaElement = audioEl;
-      (audioObj as any).file = file;
-      audioObj.data = {
+      (group as any).mediaElement = audioEl;
+      (group as any).file = file;
+      group.data = {
         name: file.name,
         type: 'audio'
       };
 
       // Add to canvas
-      canvas.add(audioObj);
+      canvas.add(group);
+      canvas.setActiveObject(group);
       canvas.renderAll();
 
       // Update state
+      setSelectedObject(group);
       setSelectedMediaType('audio');
       setIsRightSidebarOpen(true);
       saveToHistory();
-      
-      // Notify user of successful upload
-      toast({
-        title: "Audio Added",
-        description: `${file.name} added to timeline`,
-        duration: 3000
-      });
     };
 
     // Handle errors
     audioEl.onerror = () => {
       console.error('Error loading audio');
-      toast({
-        title: "Error",
-        description: "Failed to load audio file.",
-        variant: "destructive",
-      });
     };
 
     // Load the audio
@@ -1064,7 +1071,7 @@ const BrandCanvas: React.FC = () => {
                           'group relative hover:bg-purple-500/20 hover:scale-105 transition-all duration-200 ease-in-out',
                           selectedTool === button.label.toLowerCase() && 'bg-purple-500/20',
                           button.disabled && 'opacity-50 cursor-not-allowed hover:bg-transparent hover:scale-100',
-                          (button as any).className
+                          button.className
                         )}
                       >
                         <button.icon className="h-4 w-4 transition-transform group-hover:scale-110" />

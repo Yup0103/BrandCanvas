@@ -619,8 +619,7 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
 
     // Update current time during playback
     useEffect(() => {
-        // Changed this condition to allow playback updates with only audio tracks
-        if ((!videoTracks.length && !audioTracks.length) || !isPlaying) return;
+        if ((videoTracks.length === 0 && audioTracks.length === 0) || !isPlaying) return;
 
         const updatePlayback = () => {
             const now = Date.now();
@@ -629,13 +628,11 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
 
             // Update current time based on all media elements
             let maxCurrentTime = 0;
-            let hasActiveMedia = false;
             
             // Check video tracks
             for (const track of videoTracks) {
                 if (track.mediaObject.mediaElement?.currentTime) {
                     maxCurrentTime = Math.max(maxCurrentTime, track.mediaObject.mediaElement.currentTime);
-                    hasActiveMedia = true;
                 }
             }
             
@@ -643,14 +640,10 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
             for (const track of audioTracks) {
                 if (track.mediaObject.mediaElement?.currentTime) {
                     maxCurrentTime = Math.max(maxCurrentTime, track.mediaObject.mediaElement.currentTime);
-                    hasActiveMedia = true;
                 }
             }
 
-            // Only update if we have active media
-            if (hasActiveMedia) {
-                setCurrentTime(maxCurrentTime);
-            }
+            setCurrentTime(maxCurrentTime);
 
             // Auto-scroll timeline if enabled
             if (isAutoScroll && scrollAreaRef.current) {
@@ -692,19 +685,16 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                     }
                 });
             } else if (isPlaying) {
-                // Continue animation loop
                 animationRef.current = requestAnimationFrame(updatePlayback);
             }
         };
 
-        // Initialize the animation loop
         lastUpdateTime.current = Date.now();
         animationRef.current = requestAnimationFrame(updatePlayback);
 
         return () => {
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current);
-                animationRef.current = null;
             }
         };
     }, [videoTracks, audioTracks, isPlaying, duration, scale, viewportWidth, isAutoScroll]);
@@ -985,15 +975,15 @@ const CanvasTimeline: React.FC<CanvasTimelineProps> = ({ canvas, visible, onTogg
                             variant="ghost"
                             size="icon"
                             onClick={togglePlayback}
-                            disabled={videoTracks.length === 0 && audioTracks.length === 0}
+                        disabled={videoTracks.length === 0}
                         >
-                            {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                        {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
                         </Button>
                         <Button
                             variant="ghost"
                             size="icon"
                             onClick={resetPlayback}
-                            disabled={videoTracks.length === 0 && audioTracks.length === 0}
+                        disabled={videoTracks.length === 0}
                         >
                         <SkipBack className="h-4 w-4" />
                         </Button>
