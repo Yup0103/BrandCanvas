@@ -157,7 +157,7 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
             mediaElement.removeEventListener('play', handlePlay);
             mediaElement.removeEventListener('pause', handlePause);
             mediaElement.removeEventListener('ended', handleEnded);
-            
+
             // Cancel any ongoing animation frames
             if (animationRef.current) {
                 cancelAnimationFrame(animationRef.current);
@@ -168,9 +168,9 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
 
     const togglePlay = () => {
         if (!mediaObject || !mediaObject.mediaElement) return;
-        
+
         const mediaElement = mediaObject.mediaElement;
-        
+
         if (mediaElement.paused) {
             mediaElement.play()
                 .then(() => {
@@ -182,7 +182,7 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
         } else {
             mediaElement.pause();
             setIsPlaying(false);
-            
+
             // Force a frame update when paused (especially important for video)
             if (type === 'video' && canvas) {
                 canvas.requestRenderAll();
@@ -217,16 +217,16 @@ const MediaPlayer: React.FC<MediaPlayerProps> = ({ mediaObject, canvas, type }) 
     // Direct seek to a specific time
     const handleSeek = (newTime: number) => {
         if (!mediaObject || !mediaObject.mediaElement) return;
-        
+
         const mediaElement = mediaObject.mediaElement;
         mediaElement.currentTime = newTime;
         setCurrentTime(newTime);
-        
+
         // Force canvas update after seeking for video
         if (type === 'video' && canvas) {
             // Request immediate render 
             canvas.requestRenderAll();
-            
+
             // Request another render after a short delay to ensure frame is updated
             setTimeout(() => {
                 canvas.requestRenderAll();

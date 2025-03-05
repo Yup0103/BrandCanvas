@@ -66,6 +66,7 @@ import { Separator } from '@/components/ui/separator';
 import { LayerMenu } from '@/components/canvas/LayerMenu';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import CanvasTimeline from '@/components/canvas/CanvasTimeline';
+import { toast } from '@/components/ui/use-toast';
 
 const BrandCanvas: React.FC = () => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -637,21 +638,21 @@ const BrandCanvas: React.FC = () => {
     videoEl.controls = false;
     videoEl.crossOrigin = 'anonymous';
     videoEl.src = URL.createObjectURL(file);
-    
+
     // Important: Load first frame
     videoEl.currentTime = 0;
     videoEl.muted = true;
-    
+
     // Wait for the video to be loaded
     videoEl.onloadedmetadata = () => {
       // First, seek to the first frame  
       videoEl.play().then(() => {
         videoEl.pause();
-        
+
         // Get the video dimensions
         const vidWidth = videoEl.videoWidth;
         const vidHeight = videoEl.videoHeight;
-        
+
         // Create a fabric image using the video element
         const fabricVideo = new fabric.Image(videoEl, {
           left: canvasSize.width / 2,
@@ -675,7 +676,7 @@ const BrandCanvas: React.FC = () => {
 
         // Enhance rendering - crucial for fixing the cropping issue
         const originalRender = fabricVideo._render;
-        fabricVideo._render = function(ctx) {
+        fabricVideo._render = function (ctx) {
           // Draw video with proper source dimensions
           if (videoEl.readyState >= 2) {
             ctx.save();
@@ -729,7 +730,7 @@ const BrandCanvas: React.FC = () => {
         setTimeout(() => {
           setShowTimeline(true);
         }, 100);
-        
+
         // Force an additional render to ensure first frame appears
         setTimeout(() => {
           canvas.requestRenderAll();
@@ -764,61 +765,55 @@ const BrandCanvas: React.FC = () => {
 
     // Wait for the audio to be loaded
     audioEl.onloadedmetadata = () => {
-      // Create a simple rectangle to represent audio
-      const rect = new fabric.Rect({
-        left: canvasSize.width / 2,
-        top: canvasSize.height / 2,
-        width: 180,
-        height: 60,
-        fill: 'purple',
-        opacity: 0.8,
-        rx: 10,
-        ry: 10,
-        originX: 'center',
-        originY: 'center',
-      });
+      // Generate a unique ID for the audio track
+      const uniqueId = `audio-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`;
 
-      // Add text label with filename
-      const label = new fabric.Text(file.name.length > 20 ? file.name.substring(0, 17) + '...' : file.name, {
-        fontSize: 14,
-        fill: 'white',
-        originX: 'center',
-        originY: 'center',
-        left: 0,
-        top: 0,
-      });
-
-      // Create a group with the rectangle and label
-      const group = new fabric.Group([rect, label], {
-        left: canvasSize.width / 2,
-        top: canvasSize.height / 2,
-        originX: 'center',
-        originY: 'center',
+      // Create an invisible audio object that will only be used for timeline
+      // This object is not visible on canvas but can be tracked in the timeline
+      const audioObj: any = new fabric.Object({
+        width: 0,
+        height: 0,
+        left: -1000, // Position off-canvas
+        top: -1000,  // Position off-canvas
+        selectable: false,
+        evented: false,
+        visible: false
       });
 
       // Store audio element and file info
-      (group as any).mediaElement = audioEl;
-      (group as any).file = file;
-      group.data = {
+      audioObj.mediaElement = audioEl;
+      audioObj.file = file;
+      audioObj.data = {
         name: file.name,
-        type: 'audio'
+        type: 'audio',
+        duration: audioEl.duration || 0
       };
+      audioObj.id = uniqueId;
 
-      // Add to canvas
-      canvas.add(group);
-      canvas.setActiveObject(group);
+      // Add to canvas but make it invisible and non-interactive
+      canvas.add(audioObj);
       canvas.renderAll();
-
-      // Update state
-      setSelectedObject(group);
-      setSelectedMediaType('audio');
-      setIsRightSidebarOpen(true);
       saveToHistory();
+
+      // Automatically open the timeline when adding audio
+      setShowTimeline(true);
+
+      // Show notification or toast that audio was added to timeline
+      toast({
+        title: "Audio added to timeline",
+        description: `${file.name} has been added to the timeline.`,
+        variant: "default",
+      });
     };
 
     // Handle errors
     audioEl.onerror = () => {
       console.error('Error loading audio');
+      toast({
+        title: "Error loading audio",
+        description: "There was a problem loading the audio file.",
+        variant: "destructive",
+      });
     };
 
     // Load the audio
@@ -860,7 +855,7 @@ const BrandCanvas: React.FC = () => {
     if (activeSelection && activeSelection.type === 'activeSelection') {
       // Group the objects - using the proper fabric.js method with correct type
       const group = (activeSelection as fabric.ActiveSelection).toGroup();
-      
+
       // Set the group as the active object
       canvas.setActiveObject(group);
       canvas.requestRenderAll();
@@ -1102,18 +1097,18 @@ const BrandCanvas: React.FC = () => {
             if (e.ctrlKey || e.metaKey) {
               e.preventDefault();
               if (!fabricCanvasRef.current) return;
-              
+
               const delta = e.deltaY;
-              
+
               // Create a custom point based on cursor position instead of using getPointer
               const rect = e.currentTarget.getBoundingClientRect();
               const x = e.clientX - rect.left;
               const y = e.clientY - rect.top;
               const point = new fabric.Point(x, y);
-              
+
               // Calculate new zoom level
               const newZoomLevel = Math.min(Math.max(zoomLevel - delta / 2, 10), 400);
-              
+
               // Apply zoom
               if (fabricCanvasRef.current) {
                 fabricCanvasRef.current.zoomToPoint(point, newZoomLevel / 100);

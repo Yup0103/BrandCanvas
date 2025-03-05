@@ -59,7 +59,7 @@ const MediaEditor: React.FC<MediaEditorProps> = ({
             const timelineElement = document.querySelector('[data-timeline="true"]');
             const timelineVisible = timelineElement !== null && window.getComputedStyle(timelineElement).display !== 'none';
             setTimelineVisible(timelineVisible);
-            
+
             // Adjust height based on timeline visibility
             if (timelineVisible) {
                 // Calculate timeline height (approximately 200px) or get actual height
@@ -72,18 +72,18 @@ const MediaEditor: React.FC<MediaEditorProps> = ({
 
         // Initial check
         checkTimelineVisibility();
-        
+
         // Set up a mutation observer to detect changes to the DOM
         const observer = new MutationObserver(checkTimelineVisibility);
-        observer.observe(document.body, { 
-            childList: true, 
+        observer.observe(document.body, {
+            childList: true,
             subtree: true,
             attributes: true
         });
-        
+
         // Also listen for resize events
         window.addEventListener('resize', checkTimelineVisibility);
-        
+
         return () => {
             observer.disconnect();
             window.removeEventListener('resize', checkTimelineVisibility);
